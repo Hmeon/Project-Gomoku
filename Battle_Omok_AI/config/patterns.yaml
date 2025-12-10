@@ -1,0 +1,23 @@
+# Pattern weights for heuristic evaluation (self stones=1, opponent=2, empty=0).
+patterns:
+  - name: open_four
+    pattern: "011110"
+    score: 50000
+  - name: closed_four
+    pattern: ["211110", "011112"]
+    score: 20000
+  - name: open_three
+    pattern: ["01110", "010110", "011010"]
+    score: 8000
+  - name: broken_three
+    pattern: ["011100", "001110", "0101110", "0110110"]
+    score: 4000
+  - name: open_two
+    pattern: ["001100", "01010", "010010"]
+    score: 1000
+  - name: block_four
+    pattern: ["211110", "11112"]
+    score: 30000
+  - name: block_three
+    pattern: ["21110", "11012", "210110", "211010"]
+    score: 6000
