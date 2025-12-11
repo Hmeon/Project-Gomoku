@@ -17,4 +17,6 @@ def parse_args():
     )
     parser.add_argument("--settings", default="config/settings.yaml", help="Path to settings YAML")
     parser.add_argument("--gui", action="store_true", help="Enable pygame GUI (mouse input for human)")
+    parser.add_argument("--pv-checkpoint", help="Path to policy/value checkpoint to load (optional)")
+    parser.add_argument("--pv-device", default=None, help="Device for PV model (cpu or cuda, optional)")
     return parser.parse_args()

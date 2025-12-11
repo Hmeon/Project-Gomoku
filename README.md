@@ -17,6 +17,9 @@ python main.py --mode ai-vs-ai --board-size 15 --timeout 5 --gui
 - Modes: `ai-vs-ai` (default), `human-vs-ai` (human as black), `ai-vs-human` (human as white).
 - Board: 15x15 uses `assets/board.jpg`; other sizes draw a grid in code.
 - Key configs: `config/settings.yaml`, pattern weights in `config/patterns.yaml`.
+- Self-play export: `python selfplay.py --games 50 --board-size 15 --depth 3 --output selfplay_renju.jsonl` to produce JSONL with `board`, `to_play`, `pi`, `value`.
+  - Self-play skips black forbidden moves automatically to avoid Renju fouls during data generation.
+- Offline PV training: `python train_pv.py --data selfplay_renju.jsonl --epochs 5 --output checkpoints/pv_latest.pt` (small ResNet policy/value net).
 
 ## Testing
 ```bash

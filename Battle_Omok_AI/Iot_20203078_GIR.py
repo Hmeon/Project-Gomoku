@@ -12,6 +12,7 @@ class Iot_20203078_GIR(Player):
         self.cache = {}
         self.zobrist = None
         self.patterns = patterns
+        self.search_args = {}
 
     def next_move(self, board, deadline=None):
         if self.zobrist is None:
@@ -25,4 +26,5 @@ class Iot_20203078_GIR(Player):
             zobrist_table=self.zobrist,
             candidate_limit=self.candidate_limit,
             patterns=self.patterns,
+            stats=getattr(self, "stats", None),
         )

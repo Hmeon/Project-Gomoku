@@ -1,6 +1,7 @@
 """Entry point for Battle Gomoku AI matches. Load config, wire players, start Omokgame."""
 
 import yaml
+from pathlib import Path
 
 from utils.cli import parse_args
 from utils.logger import log_event
@@ -10,6 +11,8 @@ from Iot_20203078_GIR import Iot_20203078_GIR
 from Player import HumanPlayer, GuiHumanPlayer
 from ai import heuristic
 from gui.pygame_view import PygameView
+from ai import search_mcts, search_minimax
+from ai import policy_value
 
 
 def load_settings(path):
@@ -27,6 +30,18 @@ def main():
     candidate_limit = args.candidate_limit or settings.get("candidate_limit", 15)
 
     patterns = heuristic.load_patterns()
+
+    # Optional PV checkpoint
+    pv_path = Path(args.pv_checkpoint) if args.pv_checkpoint else Path("checkpoints/pv_latest.pt")
+    pv_device = args.pv_device or "cpu"
+    if pv_path.exists():
+        pv_helper = policy_value.PolicyValueInfer(str(pv_path), device=pv_device)
+        search_mcts.PV_HELPER = pv_helper
+        search_minimax.PV_HELPER = pv_helper
+        print(f"Loaded PV checkpoint: {pv_path} (device={pv_device})")
+    else:
+        if args.pv_checkpoint:
+            print(f"Warning: PV checkpoint not found at {pv_path}, proceeding without PV model.")
 
     black: object
     white: object
