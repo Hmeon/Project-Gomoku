@@ -1,30 +1,33 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `AI-Gomoku-main/gomoku/`: pygame-based Minimax player; launch via `gomoku.py`; board art in `images/`.
-- `gomokuAI-py-main/`: menu-driven pygame client; core logic in `source/AI.py`, GUI helpers in `gui/`, assets in `assets/`, entrypoint `play.py`.
-- `gomoku_rl-main/`: reinforcement-learning stack; Python package code under `gomoku_rl/`, configs in `cfg/`, training/demo scripts in `scripts/`, docs/assets under `docs/` and `assets/`, C++ Qt GUI sources in `src/`, automated tests in `tests/`.
-- Root PDFs capture research notes; keep alongside the repo for reference.
+- Core gameplay/AI in `Battle_Omok_AI/`; entrypoint `main.py`; game loop `Omokgame.py`; rules under `engine/`; search/model code in `ai/`; GUI under `gui/`; shared helpers in `utils/`.
+- Reinforcement/training scripts: `selfplay.py`, `train_pv.py`, `auto_train.py`; checkpoints in `Battle_Omok_AI/checkpoints/`; logs in `Battle_Omok_AI/logs/`.
+- Tests live in `Battle_Omok_AI/tests/` (files named `test_*.py`); GUI assets in `Battle_Omok_AI/assets/`; `reference*/` folders are historical; leave untouched.
 
 ## Build, Test, and Development Commands
-- Classic AIs: `python AI-Gomoku-main/gomoku/gomoku.py` and `python gomokuAI-py-main/play.py` (both need `pygame` installed).
-- RL environment setup: `cd gomoku_rl-main && pip install -e .[test]` (Python 3.10+; installs torch, torchrl, hydra-core, pytest).
-- Train RL agents: `python scripts/train_InRL.py num_env=256 device=cuda` (override Hydra defaults as needed).
-- Demo trained agent: `python scripts/demo.py device=cpu checkpoint=pretrained_models/15_15/...`.
-- Tests: `cd gomoku_rl-main && pytest`.
-- Optional C++ GUI build: `cmake -S src -B build -DCMAKE_PREFIX_PATH=$(python3 -c "import torch;print(torch.utils.cmake_prefix_path)") && cmake --build build --config Release`.
+- Install deps (Python 3.10+): `pip install -r requirements.txt` (add `torch-directml` for AMD GPU).
+- Play locally: `python main.py --mode ai-vs-ai --gui --enable-vcf` or `python main.py --mode human-vs-ai --gui --timeout 5`.
+- Generate self-play data: `python selfplay.py --games 10 --board-size 15 --depth 3 --output selfplay_renju.jsonl [--search-backend mcts]`.
+- Train PV net: `python train_pv.py --data selfplay_renju.jsonl --epochs 5 --output checkpoints/pv_latest.pt`.
+- Full loop: `python auto_train.py --iterations 2 --games 50 --device cpu`.
+- Tests: `cd Battle_Omok_AI && pytest` (fast unit suite).
 
 ## Coding Style & Naming Conventions
-- Python: follow PEP 8; snake_case for functions/variables, CapWords for classes; favor type hints and short, focused modules; keep imports explicit.
-- Configs: store defaults in `cfg/*.yaml`; avoid hardcoded paths; prefer CLI overrides rather than editing scripts.
-- C++ (Qt GUI): keep one class per header, include guards, and descriptive method names consistent with existing `.hpp` files.
+- Python: PEP 8, 4-space indent; snake_case for vars/functions, CapWords for classes; explicit imports and type hints preferred.
+- Keep functions short; avoid hardcoded paths; use CLI flags and config in `config/*.yaml`.
+- Preserve GUI/event loop responsiveness when adding I/O; keep board state and move history consistent.
 
 ## Testing Guidelines
-- Pytest suite lives in `gomoku_rl-main/tests/test_*.py`; mirror naming for new cases around collectors, environments, and utilities.
-- Add fast unit tests for core logic and describe any manual GUI validation steps (e.g., smoke-run `play.py` or `scripts/demo.py`) in PR notes.
-- Before merging, run `cd gomoku_rl-main && pytest`; optionally sanity-check training with a short run (`epochs=1`) when altering training code.
+- Framework: pytest; files `test_*.py` in `Battle_Omok_AI/tests/`.
+- Add targeted, fast tests for rules (Renju fouls), search heuristics, timeout handling, and PV loaders; minimal GUI smoke only.
+- Run `cd Battle_Omok_AI && pytest` before pushing.
 
 ## Commit & Pull Request Guidelines
-- Use imperative, scoped subjects (e.g., `gomoku_rl: fix action masking`) under 72 characters; keep diffs focused to the relevant subproject.
-- PRs should explain behavior changes, configs used, performance impact, and test evidence; link issues when relevant.
-- Attach screenshots or GIFs for GUI changes; call out any new dependencies or config updates in the description.
+- Commits: imperative, focused subjects under 72 chars (e.g., `gomoku: fix renju foul check`); keep diffs scoped to touched subproject.
+- PRs: describe behavior change, CLI/config used, performance impact; include test evidence (`pytest` output, self-play sample), link issues; attach screenshots or GIFs for GUI changes; call out new deps or config updates.
+
+## Security & Operational Tips
+- Validate checkpoint paths (`checkpoints/`) before training; `policy_value` accepts wrapped or plain `state_dict`.
+- Avoid destructive git commands; do not modify `reference*/` archives.
+- On Windows terminals, prefer GUI mode to avoid input polling timeouts; respect timeouts and maintain move_count/history consistency.

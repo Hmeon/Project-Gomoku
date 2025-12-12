@@ -49,8 +49,14 @@ def score_board(board, color, patterns=None):
     color: -1 (black) or 1 (white)
     """
     patterns = patterns or DEFAULT_PATTERNS
+    return score_lines(_all_lines(board), color, patterns)
+
+
+def score_lines(lines, color, patterns=None):
+    """Score a collection of lines for `color`."""
+    patterns = patterns or DEFAULT_PATTERNS
     total = 0
-    for line in _all_lines(board):
+    for line in lines:
         line_str_self, line_str_opp = _line_views(line, color)
         for pat, val in patterns:
             total += line_str_self.count(pat) * val
@@ -76,7 +82,7 @@ def _all_lines(board):
             yield diag
 
     # Anti-diagonals (top-right to bottom-left)
-    for offset in range(4, 2 * size - 4):
+    for offset in range(4, 2 * size - 5):
         anti = [cells[y][offset - y] for y in range(size) if 0 <= offset - y < size]
         if len(anti) >= 5:
             yield anti
@@ -90,3 +96,45 @@ def _line_views(line, color):
     to_self = "".join(translate_self[v] for v in line)
     to_opp = "".join(translate_opp[v] for v in line)
     return to_self, to_opp
+
+
+def _line_with_override(board, x, y, dx, dy, override=None):
+    """
+    Collect a line through (x, y) along (dx, dy). If override is not None,
+    the cell at (x, y) is replaced with that value in the returned line.
+    """
+    line = []
+    cx, cy = x, y
+    while board.in_bounds(cx - dx, cy - dy):
+        cx -= dx
+        cy -= dy
+    while board.in_bounds(cx, cy):
+        if cx == x and cy == y and override is not None:
+            val = override
+        else:
+            val = board.cells[cy][cx]
+        line.append(val)
+        cx += dx
+        cy += dy
+    return line
+
+
+def lines_through(board, x, y, override=None):
+    """Return the four lines (row/col/diagonals) passing through (x, y)."""
+    directions = [(1, 0), (0, 1), (1, 1), (1, -1)]
+    return [_line_with_override(board, x, y, dx, dy, override=override) for dx, dy in directions]
+
+
+def update_score_after_move(board, x, y, move_color, eval_color, prev_score, patterns=None):
+    """
+    Incrementally update evaluation score after placing a stone at (x, y).
+    board is assumed to already contain the stone (move_color) at (x, y).
+    eval_color is the perspective for scoring (searcher's color).
+    """
+    patterns = patterns or DEFAULT_PATTERNS
+    # Score contribution of affected lines before and after the move
+    lines_after = lines_through(board, x, y, override=None)
+    lines_before = lines_through(board, x, y, override=0)
+
+    delta = score_lines(lines_after, eval_color, patterns) - score_lines(lines_before, eval_color, patterns)
+    return prev_score + delta

@@ -34,14 +34,17 @@ def main():
     # Optional PV checkpoint
     pv_path = Path(args.pv_checkpoint) if args.pv_checkpoint else Path("checkpoints/pv_latest.pt")
     pv_device = args.pv_device or "cpu"
+    pv_helper = None
     if pv_path.exists():
         pv_helper = policy_value.PolicyValueInfer(str(pv_path), device=pv_device)
         search_mcts.PV_HELPER = pv_helper
-        search_minimax.PV_HELPER = pv_helper
         print(f"Loaded PV checkpoint: {pv_path} (device={pv_device})")
     else:
         if args.pv_checkpoint:
             print(f"Warning: PV checkpoint not found at {pv_path}, proceeding without PV model.")
+
+    # VCF option
+    enable_vcf = args.enable_vcf if hasattr(args, 'enable_vcf') else False
 
     black: object
     white: object
@@ -50,20 +53,29 @@ def main():
         view = PygameView(board_size=board_size, asset_dir="assets")
 
     if args.mode == "ai-vs-ai":
-        black = Iot_20203078_KKR(color=-1, depth=depth, candidate_limit=candidate_limit, patterns=patterns)
-        white = Iot_20203078_GIR(color=1, depth=depth, candidate_limit=candidate_limit, patterns=patterns)
+        black = Iot_20203078_KKR(color=-1, depth=depth, candidate_limit=candidate_limit, patterns=patterns, pv_helper=pv_helper, enable_vcf=enable_vcf)
+        white = Iot_20203078_GIR(color=1, depth=depth, candidate_limit=candidate_limit, patterns=patterns, pv_helper=pv_helper, enable_vcf=enable_vcf)
     elif args.mode == "human-vs-ai":
         if view:
             black = GuiHumanPlayer(color=-1, view=view)
         else:
             black = HumanPlayer(color=-1)
-        white = Iot_20203078_GIR(color=1, depth=depth, candidate_limit=candidate_limit, patterns=patterns)
+        white = Iot_20203078_GIR(color=1, depth=depth, candidate_limit=candidate_limit, patterns=patterns, pv_helper=pv_helper, enable_vcf=enable_vcf)
     elif args.mode == "ai-vs-human":
-        black = Iot_20203078_KKR(color=-1, depth=depth, candidate_limit=candidate_limit, patterns=patterns)
+        black = Iot_20203078_KKR(color=-1, depth=depth, candidate_limit=candidate_limit, patterns=patterns, pv_helper=pv_helper, enable_vcf=enable_vcf)
         if view:
             white = GuiHumanPlayer(color=1, view=view)
         else:
             white = HumanPlayer(color=1)
+    elif args.mode == "human-vs-human":
+        if view:
+            black = GuiHumanPlayer(color=-1, view=view)
+            white = GuiHumanPlayer(color=1, view=view)
+        else:
+            black = HumanPlayer(color=-1)
+            white = HumanPlayer(color=1)
+    else:
+        raise ValueError(f"Unsupported mode: {args.mode}")
 
     game = Omokgame(
         board_size=board_size,

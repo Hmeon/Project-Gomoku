@@ -11,7 +11,7 @@ def parse_args():
     parser.add_argument("--candidate-limit", type=int, help="Number of candidate moves to expand")
     parser.add_argument(
         "--mode",
-        choices=["ai-vs-ai", "human-vs-ai", "ai-vs-human"],
+        choices=["ai-vs-ai", "human-vs-ai", "ai-vs-human", "human-vs-human"],
         default="ai-vs-ai",
         help="Play mode (who plays black/white)",
     )
@@ -19,4 +19,5 @@ def parse_args():
     parser.add_argument("--gui", action="store_true", help="Enable pygame GUI (mouse input for human)")
     parser.add_argument("--pv-checkpoint", help="Path to policy/value checkpoint to load (optional)")
     parser.add_argument("--pv-device", default=None, help="Device for PV model (cpu or cuda, optional)")
+    parser.add_argument("--enable-vcf", action="store_true", help="Enable VCF search (slower but finds forced wins)")
     return parser.parse_args()

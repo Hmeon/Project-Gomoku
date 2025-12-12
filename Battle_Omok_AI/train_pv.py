@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import os
+import time
 from pathlib import Path
 
 import torch
@@ -19,12 +22,63 @@ def loss_fn(logits, target_pi, values, target_v):
     return policy_loss + value_loss, policy_loss, value_loss
 
 
-def train(args):
-    device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
-    ds = SelfPlayDataset(args.data)
-    loader = DataLoader(ds, batch_size=args.batch_size, shuffle=True, num_workers=0)
+def log_metrics(epoch, total_loss, policy_loss, value_loss):
+    """Append training metrics to a CSV file."""
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+    log_file = log_dir / "train_metrics.csv"
+    
+    file_exists = log_file.exists()
+    
+    with open(log_file, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(["timestamp", "epoch", "total_loss", "policy_loss", "value_loss"])
+        
+        writer.writerow([
+            time.strftime("%Y-%m-%d %H:%M:%S"),
+            epoch,
+            f"{total_loss:.4f}",
+            f"{policy_loss:.4f}",
+            f"{value_loss:.4f}"
+        ])
 
-    model = PolicyValueNet(board_size=args.board_size, channels=args.channels, num_blocks=args.blocks).to(device)
+
+def train(args):
+    # Device selection logic
+    device = torch.device("cpu")
+    if args.cpu:
+        device = torch.device("cpu")
+    elif args.device == "cuda" and torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif args.device == "dml":
+        try:
+            import torch_directml
+            device = torch_directml.device()
+            print("Using DirectML device")
+        except ImportError:
+            print("Warning: torch-directml not installed. Falling back to CPU.")
+            device = torch.device("cpu")
+    elif args.device and args.device != "cpu":
+        device = torch.device(args.device)
+
+    ds = SelfPlayDataset(args.data)
+    if len(ds) == 0:
+        raise ValueError(f"No training samples found in {args.data}; run selfplay.py first.")
+
+    use_batchnorm = not args.no_batchnorm and args.device != "dml"
+
+    # DirectML + BatchNorm can misbehave on very small remainder batches; drop_last avoids 1-sample tail.
+    batch_size = min(args.batch_size, len(ds))
+    drop_last = args.device == "dml"
+    loader = DataLoader(ds, batch_size=batch_size, shuffle=True, num_workers=0, drop_last=drop_last)
+
+    model = PolicyValueNet(
+        board_size=args.board_size,
+        channels=args.channels,
+        num_blocks=args.blocks,
+        use_batchnorm=use_batchnorm,
+    ).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wd)
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -45,9 +99,16 @@ def train(args):
             pol_sum += pol_loss.item() * xb.size(0)
             val_sum += val_loss.item() * xb.size(0)
         n = len(ds)
-        print(f"epoch {epoch}: loss={total/n:.4f} policy={pol_sum/n:.4f} value={val_sum/n:.4f}")
+        avg_loss = total / n
+        avg_pol = pol_sum / n
+        avg_val = val_sum / n
+        print(f"epoch {epoch}: loss={avg_loss:.4f} policy={avg_pol:.4f} value={avg_val:.4f}")
+        
+        # Log metrics to CSV
+        log_metrics(epoch, avg_loss, avg_pol, avg_val)
+
         torch.save(
-            {"model_state": model.state_dict(), "args": vars(args)},
+            {"model_state": model.state_dict(), "args": vars(args) | {"use_batchnorm": use_batchnorm}},
             out_path,
         )
     print(f"Saved checkpoint to {out_path}")
@@ -64,6 +125,8 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--wd", type=float, default=1e-4)
     parser.add_argument("--cpu", action="store_true", help="Force CPU even if CUDA is available")
+    parser.add_argument("--device", default="cpu", help="Device to use: cpu, cuda, or dml (DirectML for AMD)")
+    parser.add_argument("--no-batchnorm", action="store_true", help="Disable BatchNorm layers (helpful for DML backends)")
     parser.add_argument("--output", default="checkpoints/pv_latest.pt")
     args = parser.parse_args()
     train(args)

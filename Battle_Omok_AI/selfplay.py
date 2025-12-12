@@ -10,6 +10,13 @@ from typing import List, Tuple
 import random
 import statistics
 from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parent
+PARENT = ROOT.parent
+for path in (ROOT, PARENT):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from Board import Board
 from engine import referee, renju_rules
@@ -19,8 +26,20 @@ from Player import Player
 from ai import move_selector, heuristic, policy_value, search_minimax, search_mcts
 
 
-def snapshot(board: Board) -> List[List[int]]:
-    return [row[:] for row in board.cells]
+def snapshot_board_state(board: Board):
+    """Return a full snapshot of the board (cells, move_count, history)."""
+    return {
+        "cells": [row[:] for row in board.cells],
+        "move_count": board.move_count,
+        "history": board.history[:],
+    }
+
+
+def restore_board_state(board: Board, state):
+    """Restore board from snapshot produced by snapshot_board_state."""
+    board.cells = [row[:] for row in state["cells"]]
+    board.move_count = state["move_count"]
+    board.history = state["history"][:]
 
 
 class RandomBaseline(Player):
@@ -82,44 +101,54 @@ def play_game(board_size: int, black, white, timeout: float, random_open: int = 
         player = black if to_play == -1 else white
         deadline = time.time() + timeout
 
-        state_board = snapshot(board)  # capture state before the move
+        state_board = snapshot_board_state(board)  # capture state before the move
         # Optional randomness to diversify games
         legal_moves = move_selector.generate_candidates(board, limit=board_size * board_size)
         if to_play == -1:
             legal_moves = [mv for mv in legal_moves if not renju_rules.is_forbidden(board, mv[0], mv[1], to_play)]
 
         move = None
-        if move_index < random_open and legal_moves:
-            move = random.choice(legal_moves)
-        else:
-            try:
-                move = player.next_move(board, deadline=deadline)
-            except TimeoutError:
-                # Fallback to legal random move on timeout to keep self-play going.
-                if not legal_moves:
-                    raise
-                timeout_counts[to_play] += 1
+        # Try to get a move from the player
+        try:
+            # 1. Opening randomness
+            if move_index < random_open and legal_moves:
                 move = random.choice(legal_moves)
-            if renju_rules.is_forbidden(board, move[0], move[1], to_play) and legal_moves:
-                move = legal_moves[0]
+            else:
+                # 2. Ask player for move
+                move = player.next_move(board, deadline=deadline)
+            
+            # 3. Epsilon-greedy randomness
+            if legal_moves and random.random() < epsilon:
+                move = random.choice(legal_moves)
 
-        # epsilon-greedy randomization
-        if legal_moves and random.random() < epsilon:
+            # 4. Failsafe for fouls (AI might propose forbidden move)
+            if renju_rules.is_forbidden(board, move[0], move[1], to_play):
+                foul_attempts[to_play] += 1
+                # Must pick a legal move
+                if not legal_moves:
+                    raise ValueError("No legal moves available (all fouls)")
+                move = legal_moves[0]  # Deterministic fallback or random.choice(legal_moves)
+
+            # 5. Validate the move (time check included)
+            referee.check_move(move, board, to_play, deadline, move_index=move_index)
+
+        except TimeoutError:
+            # Handle timeout from player.next_move OR referee.check_move
+            # Restore board state in case AI left it dirty
+            restore_board_state(board, state_board)
+            
+            if not legal_moves:
+                raise ValueError("Timeout and no legal moves to fallback on")
+            timeout_counts[to_play] += 1
+            # Fallback to a random legal move
             move = random.choice(legal_moves)
-
-        # Failsafe: if AI proposes a forbidden move (e.g., due to stale cache), pick the first legal candidate.
-        if renju_rules.is_forbidden(board, move[0], move[1], to_play):
-            foul_attempts[to_play] += 1
-            candidates = move_selector.generate_candidates(board, limit=board_size * board_size)
-            legal = [mv for mv in candidates if not renju_rules.is_forbidden(board, mv[0], mv[1], to_play)]
-            if not legal:
-                raise ValueError("No legal moves available for black (Renju fouls everywhere)")
-            move = legal[0]
+            # We skip referee.check_move for the fallback because we know it comes from legal_moves
+            # and we are already handling the timeout penalty by logging it.
 
         if first_move is None:
             first_move = move
 
-        # store snapshot and policy target from the perspective of the current player (pre-move)
+        # store snapshot and policy target
         pi = [0.0] * (board_size * board_size)
         pi[move[1] * board_size + move[0]] = 1.0
         trajectory.append(
@@ -130,15 +159,6 @@ def play_game(board_size: int, black, white, timeout: float, random_open: int = 
             }
         )
 
-        try:
-            referee.check_move(move, board, to_play, deadline, move_index=move_index)
-        except TimeoutError:
-            # If we hit the deadline before validation, fall back to a fast legal move and re-check.
-            timeout_counts[to_play] += 1
-            if legal_moves:
-                move = legal_moves[0]
-            new_deadline = time.time() + 0.5  # short grace to pass validation
-            referee.check_move(move, board, to_play, new_deadline, move_index=move_index)
         board.place(*move, to_play)
 
         if renju_rules.is_win_after_move(board, *move, to_play):
@@ -195,12 +215,27 @@ def make_baseline_player(color: int, kind: str, patterns):
     return None
 
 
-def make_players(depth: int, candidate_limit: int, patterns, black_baseline: str, white_baseline: str):
+def make_players(depth: int, candidate_limit: int, patterns, black_baseline: str, white_baseline: str, pv_helper=None, enable_vcf=False, search_backend="minimax", search_args=None):
+    search_args = search_args or {}
     black = make_baseline_player(-1, black_baseline, patterns) or Iot_20203078_KKR(
-        color=-1, depth=depth, candidate_limit=candidate_limit, patterns=patterns
+        color=-1,
+        depth=depth,
+        candidate_limit=candidate_limit,
+        patterns=patterns,
+        pv_helper=pv_helper,
+        enable_vcf=enable_vcf,
+        search_backend=search_backend,
+        search_args=search_args.copy(),
     )
     white = make_baseline_player(1, white_baseline, patterns) or Iot_20203078_GIR(
-        color=1, depth=depth, candidate_limit=candidate_limit, patterns=patterns
+        color=1,
+        depth=depth,
+        candidate_limit=candidate_limit,
+        patterns=patterns,
+        pv_helper=pv_helper,
+        enable_vcf=enable_vcf,
+        search_backend=search_backend,
+        search_args=search_args.copy(),
     )
     return black, white
 
@@ -238,34 +273,44 @@ def main():
     parser.add_argument("--dirichlet-alpha", type=float, default=0.3, help="Dirichlet alpha for MCTS root noise")
     parser.add_argument("--dirichlet-frac", type=float, default=0.25, help="Dirichlet noise mix fraction at root")
     parser.add_argument("--temperature", type=float, default=1.0, help="Root visit temperature for move sampling")
+    parser.add_argument("--search-backend", choices=["minimax", "mcts"], default="minimax", help="Search algorithm to use for built-in AIs")
+    parser.add_argument("--enable-vcf", action="store_true", help="Enable VCF search during self-play")
     args = parser.parse_args()
 
     patterns = heuristic.load_patterns()
     # Optional PV helper for self-play
     pv_path = Path(args.pv_checkpoint) if args.pv_checkpoint else Path("checkpoints/pv_latest.pt")
     pv_device = args.pv_device or "cpu"
+    pv_helper = None
     if pv_path.exists():
         pv_helper = policy_value.PolicyValueInfer(str(pv_path), device=pv_device)
-        search_minimax.PV_HELPER = pv_helper
-        search_mcts.PV_HELPER = pv_helper
         print(f"Loaded PV checkpoint for self-play: {pv_path} (device={pv_device})")
     else:
         if args.pv_checkpoint:
             print(f"Warning: PV checkpoint not found at {pv_path}, proceeding without PV model.")
-    black, white = make_players(args.depth, args.candidate_limit, patterns, args.black_baseline, args.white_baseline)
+    
+    # Build search args for MCTS (only used if backend == mcts)
+    search_args = {
+        "dirichlet_alpha": args.dirichlet_alpha,
+        "dirichlet_frac": args.dirichlet_frac,
+        "temperature": args.temperature,
+        "candidate_limit": args.candidate_limit,
+    }
+
+    black, white = make_players(
+        args.depth, 
+        args.candidate_limit, 
+        patterns, 
+        args.black_baseline, 
+        args.white_baseline, 
+        pv_helper=pv_helper, 
+        enable_vcf=args.enable_vcf,
+        search_backend=args.search_backend,
+        search_args=search_args,
+    )
     if args.collect_stats:
         setattr(black, "stats", [])
         setattr(white, "stats", [])
-    # Pass exploration knobs to MCTS (if used)
-    for p in (black, white):
-        if hasattr(p, "search_args"):
-            p.search_args.update(
-                {
-                    "dirichlet_alpha": args.dirichlet_alpha,
-                    "dirichlet_frac": args.dirichlet_frac,
-                    "temperature": args.temperature,
-                }
-            )
 
     count = 0
     lengths = []
@@ -332,7 +377,24 @@ def main():
                 time_mean = statistics.mean(d["time_mean"] for d in items)
                 nps_mean = statistics.mean(d["nps_mean"] for d in items)
                 print(f"NPS color {color}: moves={moves}, time_mean={time_mean:.3f}s, nps_mean={nps_mean:.0f}")
+    
     print(f"Saved {count} games to {args.output}")
+
+    # Save summary stats to JSON for auto_train logging
+    stats_path = Path(args.output).with_name(Path(args.output).stem + "_stats.json")
+    summary = {
+        "games": count,
+        "black_wins": winners[-1],
+        "white_wins": winners[1],
+        "draws": winners[0],
+        "avg_steps": mean_len if lengths else 0,
+        "black_timeouts": timeouts[-1],
+        "white_timeouts": timeouts[1],
+        "black_fouls": fouls[-1],
+        "white_fouls": fouls[1],
+    }
+    with open(stats_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
 
 
 if __name__ == "__main__":

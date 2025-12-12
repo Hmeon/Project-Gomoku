@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 import time
+import random
 from typing import List, Optional, Tuple
 
 from . import move_selector
@@ -20,9 +21,8 @@ try:
 except ImportError:
     from Battle_Omok_AI.engine import renju_rules
 
-# Optional PV helper (ai.policy_value.PolicyValueInfer). Set externally.
+# Optional global PV helper for backward compatibility
 PV_HELPER = None
-
 
 class _Node:
     __slots__ = (
@@ -75,12 +75,15 @@ def choose_move(
     dirichlet_alpha: float = 0.3,
     dirichlet_frac: float = 0.25,
     temperature: float = 1.0,
+    pv_helper=None,
 ):
     """
     Return a move using PUCT MCTS guided by optional policy/value helper.
     - color: player to move (-1 or 1)
     - deadline: epoch seconds to stop
     """
+
+    pv_helper = pv_helper or PV_HELPER
 
     def filtered_candidates(b, c):
         cands = move_selector.generate_candidates(b, limit=candidate_limit)
@@ -98,8 +101,9 @@ def choose_move(
 
     # Root priors (with optional Dirichlet noise)
     root_priors = {}
-    if PV_HELPER is not None:
-        probs, _ = PV_HELPER.predict(board.cells, color)
+    root_value = 0.0
+    if pv_helper is not None:
+        probs, root_value = pv_helper.predict(board.cells, color)
         for mv in candidates:
             idx = mv[1] * board.size + mv[0]
             root_priors[mv] = probs[idx].item()
@@ -108,14 +112,23 @@ def choose_move(
         for mv in candidates:
             root_priors[mv] = uniform
 
-    if dirichlet_alpha > 0 and dirichlet_frac > 0:
-        import torch
+        if dirichlet_alpha > 0 and dirichlet_frac > 0:
+            try:
+                import torch
+                noise = torch.distributions.Dirichlet(torch.full((len(candidates),), dirichlet_alpha)).sample()
+                for i, mv in enumerate(candidates):
+                    root_priors[mv] = (1 - dirichlet_frac) * root_priors[mv] + dirichlet_frac * noise[i].item()
+            except ImportError:
+                pass
 
-        noise = torch.distributions.Dirichlet(torch.full((len(candidates),), dirichlet_alpha)).sample()
-        for i, mv in enumerate(candidates):
-            root_priors[mv] = (1 - dirichlet_frac) * root_priors[mv] + dirichlet_frac * noise[i].item()
-
-    root = _Node(move=None, parent=None, untried=list(candidates), prior=1.0)
+    root = _Node(move=None, parent=None, untried=[], prior=1.0)
+    root.priors = root_priors
+    # Explicitly populate root children so Selection can pick among them immediately
+    for mv in candidates:
+        child = _Node(move=mv, parent=root, untried=[], prior=root_priors.get(mv, 0.0))
+        root.children.append(child)
+    root.is_expanded = True
+    root.value_estimate = float(root_value) if pv_helper is not None else 0.0
 
     def time_ok():
         if time.time() > deadline:
@@ -128,8 +141,8 @@ def choose_move(
             node.untried = list(moves)
             priors = {}
             val = 0.0
-            if PV_HELPER is not None:
-                probs, val = PV_HELPER.predict(sim_board.cells, to_move)
+            if pv_helper is not None:
+                probs, val = pv_helper.predict(sim_board.cells, to_move)
                 for mv in moves:
                     idx = mv[1] * sim_board.size + mv[0]
                     priors[mv] = probs[idx].item()
@@ -137,7 +150,7 @@ def choose_move(
                 priors = {mv: 1.0 / max(len(moves), 1) for mv in moves}
                 val = 0.0
             node.priors = priors
-            node.value_estimate = float(val) if PV_HELPER is not None else 0.0
+            node.value_estimate = float(val) if pv_helper is not None else 0.0
 
             if not node.children:
                 for mv in moves:
@@ -212,21 +225,19 @@ def choose_move(
     if not root.children:
         return candidates[0]
     if temperature <= 1e-3:
-        best = max(root.children, key=lambda n: n.visits)
+        best = max(root.children, key=lambda n: (n.visits, random.random()))
         return best.move
-    import math as _math
+
     visits = [c.visits for c in root.children]
-    max_v = max(visits)
-    probs = []
-    for v in visits:
-        probs.append((v + 1e-8) ** (1.0 / temperature))
-    total = sum(probs)
-    r = (_math.fsum(probs) * 0)  # dummy to keep fsum import warning quiet
-    # simple multinomial sampling without numpy
-    rnd = (total) * (time.time() % 1.0)
+    weights = [(v + 1e-8) ** (1.0 / temperature) for v in visits]
+    total = sum(weights)
+    if total <= 0:
+        return random.choice(root.children).move
+
+    rnd = random.random() * total
     acc = 0.0
-    for child, p in zip(root.children, probs):
-        acc += p
+    for child, w in zip(root.children, weights):
+        acc += w
         if rnd <= acc:
             return child.move
     return root.children[-1].move

@@ -7,6 +7,7 @@ class Board:
         self.size = size
         self.cells = [[0] * size for _ in range(size)]
         self.move_count = 0
+        self.history = []
 
     def in_bounds(self, x, y):
         return 0 <= x < self.size and 0 <= y < self.size
@@ -24,11 +25,13 @@ class Board:
             raise ValueError("cell already occupied")
         self.cells[y][x] = color
         self.move_count += 1
+        self.history.append((x, y))
 
     def clone(self):
         new_board = Board(self.size)
         new_board.cells = [row[:] for row in self.cells]
         new_board.move_count = self.move_count
+        new_board.history = self.history[:]
         return new_board
 
     def has_exact_five(self, x, y):
