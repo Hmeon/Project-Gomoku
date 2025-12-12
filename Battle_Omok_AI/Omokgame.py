@@ -1,4 +1,4 @@
-"""Game loop and turn management for Gomoku-Pro rule set."""
+"""Game loop and turn management for Renju rule set."""
 
 import time
 try:
@@ -53,7 +53,10 @@ class Omokgame:
                 elif self.board.move_count >= self.board.size * self.board.size:
                     self.logger("Result: Draw (board full)")
                     game_result = 0
-                
+
+                if game_result is not None:
+                    break
+
                 color = -color  # swap turns
                 self.move_index += 1
 

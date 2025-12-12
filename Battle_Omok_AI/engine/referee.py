@@ -10,7 +10,7 @@ except ImportError:
 
 def check_move(move, board, color, deadline, move_index=None):
     """
-    Validate a move against time, bounds, occupancy, and opening rules.
+    Validate a move against time, bounds, occupancy, and Renju forbidden-move rules.
     Raises ValueError/TimeoutError on invalid moves.
     """
     if time.time() > deadline:

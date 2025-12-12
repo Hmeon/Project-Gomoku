@@ -2,6 +2,7 @@
 
 import os
 import time
+from pathlib import Path
 
 class PygameView:
     # --- Constants ---
@@ -19,13 +20,19 @@ class PygameView:
         self.asset_board_size = 540
         self.asset_margin = 23
         self.board_size = board_size
-        self.asset_dir = asset_dir
+        asset_path = Path(asset_dir)
+        if not asset_path.is_absolute() and not asset_path.exists():
+            # Allow running from repo root (e.g., `python -m Battle_Omok_AI.main`).
+            candidate = Path(__file__).resolve().parents[1] / asset_path
+            if candidate.exists():
+                asset_path = candidate
+        self.asset_dir = str(asset_path)
         self.window_size = window_size
         self._pygame = pygame
 
         pygame.init()
         self.screen = pygame.display.set_mode((window_size, window_size))
-        pygame.display.set_caption("Gomoku-Pro Battle")
+        pygame.display.set_caption("Renju Battle")
 
         # Fonts
         self.font_large = pygame.font.Font(None, 48)
@@ -101,7 +108,7 @@ class PygameView:
                 piece_surf = self.black_piece if stone_color == -1 else self.white_piece
                 px = cx - piece_surf.get_width() / 2
                 py = cy - piece_surf.get_height() / 2
-                self.screen.blit(piece_surf, (px, py))
+                self.screen.blit(piece_surf, (int(px), int(py)))
 
     def _draw_last_move_marker(self, last_move):
         if not last_move:
@@ -113,7 +120,12 @@ class PygameView:
         cy = gy + ly * self.tile_size
         
         # A simple red dot in the center of the piece
-        self._pygame.draw.circle(self.screen, self.COLOR_RED, (cx, cy), self.tile_size * 0.2)
+        self._pygame.draw.circle(
+            self.screen,
+            self.COLOR_RED,
+            (int(cx), int(cy)),
+            int(self.tile_size * 0.2),
+        )
 
     def _draw_info_panel(self, current_player_color, game_result):
         # Panel background
@@ -132,7 +144,7 @@ class PygameView:
             msg = f"{player} to move"
             self._draw_text(msg, self.font_medium, self.COLOR_TEXT, (self.window_size / 2, self.PANEL_HEIGHT / 2))
 
-    def render(self, board, last_move=None, current_player_color=None, game_result=None):
+    def render(self, board, last_move=None, current_player_color=None, game_result=None, *, flip: bool = True):
         self.screen.fill(self.COLOR_BACKGROUND)
         self.screen.blit(self.board_surface, self.board_origin)
         
@@ -140,7 +152,8 @@ class PygameView:
         self._draw_last_move_marker(last_move)
         self._draw_info_panel(current_player_color, game_result)
 
-        self._pygame.display.flip()
+        if flip:
+            self._pygame.display.flip()
 
     def _get_coords_from_mouse(self, pos):
         mx, my = pos
@@ -172,7 +185,7 @@ class PygameView:
             piece_surf = self.black_piece_hover if player_color == -1 else self.white_piece_hover
             px = cx - piece_surf.get_width() / 2
             py = cy - piece_surf.get_height() / 2
-            self.screen.blit(piece_surf, (px, py))
+            self.screen.blit(piece_surf, (int(px), int(py)))
 
     def wait_for_move(self, board, deadline, player_color):
         pygame = self._pygame
@@ -189,7 +202,12 @@ class PygameView:
                         return coords
             
             # Re-render the board with the hover marker
-            self.render(board, last_move=board.history[-1] if board.history else None, current_player_color=player_color)
+            self.render(
+                board,
+                last_move=board.history[-1] if board.history else None,
+                current_player_color=player_color,
+                flip=False,
+            )
             self._draw_hover_marker(player_color)
             pygame.display.flip()
             

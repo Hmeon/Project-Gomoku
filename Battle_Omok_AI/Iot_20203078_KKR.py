@@ -22,12 +22,14 @@ class Iot_20203078_KKR(Player):
         self.search_backend = search_backend
 
     def next_move(self, board, deadline=None):
+        # Reset last policy distribution each move; populated for MCTS backend.
+        self.last_pi = None
         if self.zobrist is None:
             self.zobrist = transposition.zobrist_init(board.size)
 
         if self.search_backend == "mcts":
             args = self.search_args
-            return search_mcts.choose_move(
+            move, pi = search_mcts.choose_move(
                 board,
                 color=self.color,
                 deadline=deadline,
@@ -38,7 +40,10 @@ class Iot_20203078_KKR(Player):
                 dirichlet_frac=args.get("dirichlet_frac", 0.25),
                 temperature=args.get("temperature", 1.0),
                 pv_helper=self.pv_helper,
+                return_pi=True,
             )
+            self.last_pi = pi
+            return move
 
         return search_minimax.choose_move(
             board,

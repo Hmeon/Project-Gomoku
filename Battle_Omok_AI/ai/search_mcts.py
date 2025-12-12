@@ -59,10 +59,16 @@ class _Node:
         self.terminal = False  # whether this node is a terminal state
 
     def puct(self, parent_visits: int, c_puct: float) -> float:
-        """PUCT score; assumes value_sum is stored from this node's to-move perspective (no sign flips here)."""
-        q = 0.0 if self.visits == 0 else self.value_sum / self.visits
+        """
+        PUCT score from the *parent* perspective.
+
+        value_sum is stored from this node's to-move perspective, so the parent
+        sees the negated Q when choosing among children.
+        """
+        q_self = 0.0 if self.visits == 0 else self.value_sum / self.visits
+        q_parent = -q_self
         u = c_puct * self.prior * math.sqrt(parent_visits + 1e-8) / (1 + self.visits)
-        return q + u
+        return q_parent + u
 
 
 def choose_move(
@@ -76,11 +82,13 @@ def choose_move(
     dirichlet_frac: float = 0.25,
     temperature: float = 1.0,
     pv_helper=None,
+    return_pi: bool = False,
 ):
     """
     Return a move using PUCT MCTS guided by optional policy/value helper.
     - color: player to move (-1 or 1)
     - deadline: epoch seconds to stop
+    - return_pi: if True, also return root visit distribution (pi) as a list
     """
 
     pv_helper = pv_helper or PV_HELPER
@@ -89,18 +97,49 @@ def choose_move(
         cands = move_selector.generate_candidates(b, limit=candidate_limit)
         if c == -1:
             cands = [mv for mv in cands if not renju_rules.is_forbidden(b, mv[0], mv[1], c)]
+            if not cands:
+                # Rare fallback: if all local candidates are forbidden, allow any legal empty.
+                legal_all = [
+                    (x, y)
+                    for y in range(b.size)
+                    for x in range(b.size)
+                    if b.is_empty(x, y) and not renju_rules.is_forbidden(b, x, y, c)
+                ]
+                cands = legal_all[:candidate_limit]
         return cands
 
     candidates = filtered_candidates(board, color)
     if not candidates:
+        legal_all: List[Tuple[int, int]] = []
         for y in range(board.size):
             for x in range(board.size):
-                if board.is_empty(x, y) and (color != -1 or not renju_rules.is_forbidden(board, x, y, color)):
-                    return (x, y)
-        return (0, 0)
+                if not board.is_empty(x, y):
+                    continue
+                if color == -1 and renju_rules.is_forbidden(board, x, y, color):
+                    continue
+                legal_all.append((x, y))
+        if not legal_all:
+            raise ValueError("No legal moves available for MCTS")
+
+        move = legal_all[0]
+        if return_pi:
+            pi = [0.0] * (board.size * board.size)
+            pi[move[1] * board.size + move[0]] = 1.0
+            return move, pi
+        return move
+
+    def normalize_priors(priors: dict, moves: List[Tuple[int, int]]):
+        total = sum(priors.get(mv, 0.0) for mv in moves)
+        if total <= 0:
+            uniform = 1.0 / max(len(moves), 1)
+            for mv in moves:
+                priors[mv] = uniform
+            return
+        for mv in moves:
+            priors[mv] = priors.get(mv, 0.0) / total
 
     # Root priors (with optional Dirichlet noise)
-    root_priors = {}
+    root_priors: dict[Tuple[int, int], float] = {}
     root_value = 0.0
     if pv_helper is not None:
         probs, root_value = pv_helper.predict(board.cells, color)
@@ -112,14 +151,20 @@ def choose_move(
         for mv in candidates:
             root_priors[mv] = uniform
 
-        if dirichlet_alpha > 0 and dirichlet_frac > 0:
-            try:
-                import torch
-                noise = torch.distributions.Dirichlet(torch.full((len(candidates),), dirichlet_alpha)).sample()
-                for i, mv in enumerate(candidates):
-                    root_priors[mv] = (1 - dirichlet_frac) * root_priors[mv] + dirichlet_frac * noise[i].item()
-            except ImportError:
-                pass
+    # Normalize and inject Dirichlet noise at root for exploration (useful for self-play).
+    normalize_priors(root_priors, candidates)
+    if dirichlet_alpha > 0 and dirichlet_frac > 0 and len(candidates) > 1:
+        try:
+            import torch
+
+            noise = torch.distributions.Dirichlet(
+                torch.full((len(candidates),), dirichlet_alpha)
+            ).sample()
+            for i, mv in enumerate(candidates):
+                root_priors[mv] = (1 - dirichlet_frac) * root_priors[mv] + dirichlet_frac * noise[i].item()
+            normalize_priors(root_priors, candidates)
+        except ImportError:
+            pass
 
     root = _Node(move=None, parent=None, untried=[], prior=1.0)
     root.priors = root_priors
@@ -139,6 +184,15 @@ def choose_move(
         if node.priors is None:
             moves = node.untried or filtered_candidates(sim_board, to_move)
             node.untried = list(moves)
+            if not moves:
+                # No legal moves for side to move -> loss from this node's perspective.
+                node.priors = {}
+                node.children = []
+                node.untried = []
+                node.terminal = True
+                node.value_estimate = -1.0
+                node.is_expanded = True
+                return node.value_estimate
             priors = {}
             val = 0.0
             if pv_helper is not None:
@@ -149,6 +203,7 @@ def choose_move(
             else:
                 priors = {mv: 1.0 / max(len(moves), 1) for mv in moves}
                 val = 0.0
+            normalize_priors(priors, moves)
             node.priors = priors
             node.value_estimate = float(val) if pv_helper is not None else 0.0
 
@@ -182,62 +237,119 @@ def choose_move(
         while rollout_count < rollout_limit:
             time_ok()
             node = root
-            sim_board = board.clone()
+            sim_board = board
             to_move = color
+            applied_moves: List[Tuple[int, int]] = []
 
-            # Selection
-            while node.is_expanded and node.children:
-                node = max(node.children, key=lambda n: n.puct(node.visits, explore))
-                sim_board.place(*node.move, to_move)
-                if renju_rules.is_win_after_move(sim_board, *node.move, to_move):
-                    # Current player wins; pass +1 (current perspective). backprop flips for parent.
-                    node.terminal = True
-                    node.is_expanded = True
-                    node.children = []
-                    node.untried = []
-                    backprop(node, 1.0)
-                    rollout_count += 1
-                    break
-                if sim_board.move_count >= sim_board.size * sim_board.size:
-                    node.terminal = True
-                    node.is_expanded = True
-                    node.children = []
-                    node.untried = []
-                    backprop(node, 0.0)
-                    rollout_count += 1
-                    break
-                to_move = -to_move
-            else:
-                # Expansion/Eval
-                if not node.is_expanded:
-                    value = expand_and_eval(node, sim_board, to_move)
-                    backprop(node, value)
-                    rollout_count += 1
-                    continue
-                elif not node.children:
-                    backprop(node, 0.0)
-                    rollout_count += 1
-                    continue
+            try:
+                # Selection
+                while node.is_expanded and node.children:
+                    node = max(node.children, key=lambda n: n.puct(node.visits, explore))
+                    x, y = node.move
+                    sim_board._push_stone(x, y, to_move)
+                    applied_moves.append((x, y))
+
+                    if renju_rules.is_win_after_move(sim_board, x, y, to_move):
+                        # Previous player (to_move) has just won, so from this node's
+                        # to-move (opponent) perspective the value is -1.
+                        node.terminal = True
+                        node.is_expanded = True
+                        node.children = []
+                        node.untried = []
+                        backprop(node, -1.0)
+                        rollout_count += 1
+                        break
+                    if sim_board.move_count >= sim_board.size * sim_board.size:
+                        node.terminal = True
+                        node.is_expanded = True
+                        node.children = []
+                        node.untried = []
+                        backprop(node, 0.0)
+                        rollout_count += 1
+                        break
+                    to_move = -to_move
+                else:
+                    # Expansion/Eval
+                    if not node.is_expanded:
+                        value = expand_and_eval(node, sim_board, to_move)
+                        backprop(node, value)
+                        rollout_count += 1
+                        continue
+                    elif not node.children:
+                        # No legal moves at this node -> loss for side to move.
+                        backprop(node, -1.0)
+                        rollout_count += 1
+                        continue
+            finally:
+                # Undo simulation moves to restore original board.
+                for x, y in reversed(applied_moves):
+                    sim_board._pop_stone(x, y)
     except TimeoutError:
         pass
 
-    # Pick move
+    def build_pi_from_children(children: List[_Node]) -> list[float]:
+        size = board.size
+        pi = [0.0] * (size * size)
+        if not children:
+            return pi
+        if temperature <= 1e-3:
+            best_child = max(children, key=lambda n: (n.visits, random.random()))
+            idx = best_child.move[1] * size + best_child.move[0]
+            pi[idx] = 1.0
+            return pi
+
+        visits = [c.visits for c in children]
+        weights = [(v + 1e-8) ** (1.0 / temperature) for v in visits]
+        total_w = sum(weights)
+        if total_w <= 0:
+            uniform = 1.0 / max(len(children), 1)
+            for c in children:
+                idx = c.move[1] * size + c.move[0]
+                pi[idx] = uniform
+            return pi
+
+        for c, w in zip(children, weights):
+            idx = c.move[1] * size + c.move[0]
+            pi[idx] = w / total_w
+        return pi
+
+    # Pick move and optional pi
     if not root.children:
-        return candidates[0]
+        move = candidates[0]
+        if return_pi:
+            pi = [0.0] * (board.size * board.size)
+            pi[move[1] * board.size + move[0]] = 1.0
+            return move, pi
+        return move
+
     if temperature <= 1e-3:
         best = max(root.children, key=lambda n: (n.visits, random.random()))
-        return best.move
+        move = best.move
+        if return_pi:
+            pi = build_pi_from_children(root.children)
+            return move, pi
+        return move
 
     visits = [c.visits for c in root.children]
     weights = [(v + 1e-8) ** (1.0 / temperature) for v in visits]
     total = sum(weights)
     if total <= 0:
-        return random.choice(root.children).move
+        move = random.choice(root.children).move
+        if return_pi:
+            pi = build_pi_from_children(root.children)
+            return move, pi
+        return move
 
     rnd = random.random() * total
     acc = 0.0
+    move = root.children[-1].move
     for child, w in zip(root.children, weights):
         acc += w
         if rnd <= acc:
-            return child.move
-    return root.children[-1].move
+            move = child.move
+            break
+
+    if return_pi:
+        pi = build_pi_from_children(root.children)
+        return move, pi
+    return move

@@ -1,5 +1,6 @@
 """Pattern and weight definitions for Gomoku evaluation (open threes, fours, etc.)."""
 
+from pathlib import Path
 import yaml
 
 # Default patterns; can be overridden by loading config/patterns.yaml if desired.
@@ -22,6 +23,13 @@ DEFAULT_PATTERNS = [
 
 def load_patterns(path="config/patterns.yaml"):
     """Load pattern weights from YAML; fallback to defaults on error/missing."""
+    path = Path(path)
+    if not path.is_absolute() and not path.exists():
+        # Allow running from repo root (e.g., `python -m Battle_Omok_AI.main`).
+        candidate = Path(__file__).resolve().parents[1] / path
+        if candidate.exists():
+            path = candidate
+
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}

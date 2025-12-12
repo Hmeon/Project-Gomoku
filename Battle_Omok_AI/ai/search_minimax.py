@@ -47,6 +47,7 @@ class MinimaxSearcher:
         self.deadline = deadline
         self.start_time = time.time()
         self.root_score = heuristic.score_board(board, self.color, patterns=self.patterns)
+        root_hash = transposition.hash_board(board, self.zobrist_table)
         
         # First try a narrow VCF search for forced wins, if enabled.
         if self.enable_vcf:
@@ -57,7 +58,16 @@ class MinimaxSearcher:
         best_move = None
         for current_depth in range(1, self.depth + 1):
             try:
-                _, move = self._minimax(board, self.color, current_depth, -float("inf"), float("inf"), self.root_score, last_move=None)
+                _, move = self._minimax(
+                    board,
+                    self.color,
+                    current_depth,
+                    -float("inf"),
+                    float("inf"),
+                    self.root_score,
+                    last_move=None,
+                    current_hash=root_hash,
+                )
                 if move is not None:
                     best_move = move
                     self.pv_move = move  # Principal variation move for next iteration
@@ -79,7 +89,7 @@ class MinimaxSearcher:
             if time.time() > self.deadline:
                 raise TimeoutError("Search timed out")
 
-    def _minimax(self, board, node_color, depth, alpha, beta, current_score, last_move):
+    def _minimax(self, board, node_color, depth, alpha, beta, current_score, last_move, current_hash: int):
         self._time_ok()
 
         # Terminal state check
@@ -87,7 +97,7 @@ class MinimaxSearcher:
             return self._evaluate_terminal(board, node_color, current_score), None
 
         # Transposition table lookup
-        key = (transposition.hash_board(board, self.zobrist_table), node_color)
+        key = (current_hash, node_color)
         cached = self.cache.get(key)
         if cached:
             cached_depth, cached_score, cached_flag, cached_move = cached
@@ -101,34 +111,48 @@ class MinimaxSearcher:
                 if alpha >= beta:
                     return cached_score, cached_move
 
-        # Generate and order moves
-        candidates = move_selector.generate_candidates(board, limit=self.candidate_limit)
+        # Generate and order moves (filter black fouls; fall back to full-scan if needed)
+        candidates = self._legal_candidates(board, node_color)
         if not candidates:
-            return self._evaluate_terminal(board, node_color, current_score), None
+            # No legal moves for the side to move -> disqualification loss.
+            score = (-INF + board.move_count) if node_color == self.color else (INF - board.move_count)
+            return score, None
 
         ordered_moves = self._order_moves(board, candidates, node_color, depth)
+        if not ordered_moves:
+            score = (-INF + board.move_count) if node_color == self.color else (INF - board.move_count)
+            return score, None
 
         # Main search loop
         alpha_orig = alpha
-        best_score, best_local_move = self._search_moves(board, node_color, depth, alpha, beta, ordered_moves, current_score)
+        beta_orig = beta
+        best_score, best_local_move = self._search_moves(
+            board,
+            node_color,
+            depth,
+            alpha,
+            beta,
+            ordered_moves,
+            current_score,
+            current_hash,
+        )
         
         # Store result in transposition table
-        self._store_cache(key, depth, best_score, alpha_orig, beta, best_local_move)
+        self._store_cache(key, depth, best_score, alpha_orig, beta_orig, best_local_move)
 
         return best_score, best_local_move
 
-    def _search_moves(self, board, node_color, depth, alpha, beta, ordered_moves, current_score):
+    def _search_moves(self, board, node_color, depth, alpha, beta, ordered_moves, current_score, current_hash: int):
         maximizing = (node_color == self.color)
         best_score = -INF if maximizing else INF
         best_local_move = None
 
         for move, win_now, _ in ordered_moves:
             x, y = move
-            if node_color == -1 and renju_rules.is_forbidden(board, x, y, node_color):
-                continue
             
-            board.cells[y][x] = node_color
-            board.move_count += 1
+            board._push_stone(x, y, node_color)
+            color_idx = 0 if node_color == -1 else 1
+            next_hash = current_hash ^ self.zobrist_table[y * self.board_size + x][color_idx]
 
             try:
                 new_score = heuristic.update_score_after_move(
@@ -137,10 +161,18 @@ class MinimaxSearcher:
                 if win_now:
                     score = (INF - board.move_count) if maximizing else (-INF + board.move_count)
                 else:
-                    score, _ = self._minimax(board, -node_color, depth - 1, alpha, beta, new_score, last_move=move)
+                    score, _ = self._minimax(
+                        board,
+                        -node_color,
+                        depth - 1,
+                        alpha,
+                        beta,
+                        new_score,
+                        last_move=move,
+                        current_hash=next_hash,
+                    )
             finally:
-                board.cells[y][x] = 0
-                board.move_count -= 1
+                board._pop_stone(x, y)
 
             if maximizing:
                 if score > best_score:
@@ -157,6 +189,25 @@ class MinimaxSearcher:
                 break
         
         return best_score, best_local_move
+
+    def _legal_candidates(self, board, node_color):
+        """
+        Generate candidate moves for a node.
+        For black, filter forbidden moves; if all local candidates are forbidden,
+        fall back to scanning all legal empties (rare but avoids search dead-ends).
+        """
+        candidates = move_selector.generate_candidates(board, limit=self.candidate_limit)
+        if node_color != -1:
+            return candidates
+
+        legal = [mv for mv in candidates if not renju_rules.is_forbidden(board, mv[0], mv[1], node_color)]
+        if legal:
+            return legal
+
+        # Rare fallback: expand to any legal empty cell.
+        all_empty = [(x, y) for y in range(self.board_size) for x in range(self.board_size) if board.is_empty(x, y)]
+        legal_all = [mv for mv in all_empty if not renju_rules.is_forbidden(board, mv[0], mv[1], node_color)]
+        return legal_all[: self.candidate_limit]
 
     def _evaluate_terminal(self, board, node_color, current_score):
         score = current_score
@@ -186,12 +237,11 @@ class MinimaxSearcher:
             x, y = move
             if board.cells[y][x] != 0:
                 continue
-            
-            board.cells[y][x] = node_color
-            board.move_count += 1
-            win_now = renju_rules.is_win_after_move(board, x, y, node_color)
-            board.cells[y][x] = 0
-            board.move_count -= 1
+            board._push_stone(x, y, node_color)
+            try:
+                win_now = renju_rules.is_win_after_move(board, x, y, node_color)
+            finally:
+                board._pop_stone(x, y)
             
             local_score = INF // 2 if win_now else self._local_density(board, x, y, node_color, opp)
 
@@ -236,7 +286,7 @@ class MinimaxSearcher:
                     if self.color == -1 and renju_rules.is_forbidden(board, x, y, self.color):
                         continue
                     return (x, y)
-        return None # Should not happen on a non-full board
+        raise ValueError("No legal moves available for search fallback")
 
     def _record_stats(self):
         total_time = max(time.time() - self.start_time, 1e-9)
@@ -249,7 +299,16 @@ class MinimaxSearcher:
         })
 
     def _solve_vcf(self, board, color, candidate_limit, max_depth=4):
-        """Very narrow VCF-style search: look for double threats or immediate wins."""
+        """
+        Continuous-four (VCF) probe.
+
+        This is a conservative forced-win shortcut used only at the root when
+        enable_vcf=True. It searches for sequences where the attacker repeatedly
+        creates a four threat (a next-move exact win), and the defender is forced
+        to block those winning points. If the attacker can maintain this for up to
+        max_depth plies, we treat the root move as a VCF win.
+        """
+
         def time_guard():
             if time.time() > self.deadline:
                 raise TimeoutError
@@ -258,43 +317,87 @@ class MinimaxSearcher:
             wins = []
             for mv in cands:
                 x, y = mv
-                if b.cells[y][x] != 0: continue
-                if turn == -1 and renju_rules.is_forbidden(b, x, y, turn): continue
-                
-                b.cells[y][x] = turn
-                b.move_count += 1
-                if renju_rules.is_win_after_move(b, x, y, turn):
-                    wins.append(mv)
-                b.cells[y][x] = 0
-                b.move_count -= 1
+                if b.cells[y][x] != 0:
+                    continue
+                if turn == -1 and renju_rules.is_forbidden(b, x, y, turn):
+                    continue
+
+                b._push_stone(x, y, turn)
+                try:
+                    if renju_rules.is_win_after_move(b, x, y, turn):
+                        wins.append(mv)
+                finally:
+                    b._pop_stone(x, y)
             return wins
 
-        def dfs(b, turn, depth_left):
+        def legal_candidates(b, turn, limit):
+            cands = move_selector.generate_candidates(b, limit=limit)
+            if turn == -1:
+                cands = [mv for mv in cands if not renju_rules.is_forbidden(b, mv[0], mv[1], turn)]
+            return cands
+
+        def winning_points(b, attacker):
+            # Points where attacker would win immediately next move.
+            cands = legal_candidates(b, attacker, limit=b.size * b.size)
+            return immediate_wins(b, attacker, cands)
+
+        def dfs(b, attacker, depth_left):
             time_guard()
-            cands = move_selector.generate_candidates(b, limit=candidate_limit)
-            win_moves = immediate_wins(b, turn, cands)
-            if win_moves:
-                return win_moves[0]
-            if depth_left == 0:
+            attack_moves = legal_candidates(b, attacker, limit=candidate_limit)
+            if not attack_moves:
                 return None
 
-            for mv in cands:
+            for mv in attack_moves:
+                time_guard()
                 x, y = mv
-                if b.cells[y][x] != 0: continue
-                if turn == -1 and renju_rules.is_forbidden(b, x, y, turn): continue
-                
-                b.cells[y][x] = turn
-                b.move_count += 1
-                
-                # If this move creates a forced win sequence for the opponent
-                if dfs(b, -turn, depth_left - 1) is None:
-                    # Opponent has no response, so this is a winning move
-                    b.cells[y][x] = 0
-                    b.move_count -= 1
-                    return mv
-                
-                b.cells[y][x] = 0
-                b.move_count -= 1
+                if b.cells[y][x] != 0:
+                    continue
+
+                b._push_stone(x, y, attacker)
+                try:
+                    if renju_rules.is_win_after_move(b, x, y, attacker):
+                        return mv
+
+                    points = winning_points(b, attacker)
+                    if len(points) >= 2:
+                        # Double-threat (open four / double four) -> forced win.
+                        return mv
+                    if depth_left == 0 or not points:
+                        continue
+
+                    defender = -attacker
+                    defense_moves = []
+                    for bx, by in points:
+                        if b.cells[by][bx] != 0:
+                            continue
+                        if defender == -1 and renju_rules.is_forbidden(b, bx, by, defender):
+                            continue
+                        defense_moves.append((bx, by))
+
+                    if len(defense_moves) < len(points):
+                        # Some winning points cannot be legally blocked by defender.
+                        return mv
+
+                    forced = True
+                    for block in defense_moves:
+                        time_guard()
+                        bx, by = block
+                        b._push_stone(bx, by, defender)
+                        try:
+                            if renju_rules.is_win_after_move(b, bx, by, defender):
+                                forced = False
+                                break
+                            if dfs(b, attacker, depth_left - 1) is None:
+                                forced = False
+                                break
+                        finally:
+                            b._pop_stone(bx, by)
+
+                    if forced:
+                        return mv
+                finally:
+                    b._pop_stone(x, y)
+
             return None
 
         try:

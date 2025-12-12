@@ -55,8 +55,8 @@ class HumanPlayer(Player):
         try:
             x_str, y_str = raw.split()
             return int(x_str), int(y_str)
-        except Exception:
-            raise ValueError("Invalid input format; expected two integers")
+        except ValueError as exc:
+            raise ValueError("Invalid input format; expected two integers") from exc
 
 
 class GuiHumanPlayer(Player):

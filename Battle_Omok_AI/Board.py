@@ -8,6 +8,20 @@ class Board:
         self.cells = [[0] * size for _ in range(size)]
         self.move_count = 0
         self.history = []
+        # Fast lookup for candidate generation and simulations.
+        self.occupied = set()
+
+    def _push_stone(self, x: int, y: int, color: int) -> None:
+        """Fast, unchecked placement for search/simulation (does not touch history)."""
+        self.cells[y][x] = color
+        self.move_count += 1
+        self.occupied.add((x, y))
+
+    def _pop_stone(self, x: int, y: int) -> None:
+        """Fast, unchecked undo for search/simulation (does not touch history)."""
+        self.cells[y][x] = 0
+        self.move_count -= 1
+        self.occupied.discard((x, y))
 
     def in_bounds(self, x, y):
         return 0 <= x < self.size and 0 <= y < self.size
@@ -26,13 +40,24 @@ class Board:
         self.cells[y][x] = color
         self.move_count += 1
         self.history.append((x, y))
+        self.occupied.add((x, y))
 
     def clone(self):
         new_board = Board(self.size)
         new_board.cells = [row[:] for row in self.cells]
         new_board.move_count = self.move_count
         new_board.history = self.history[:]
+        new_board.occupied = set(self.occupied)
         return new_board
+
+    def rebuild_occupied(self) -> None:
+        """Rebuild occupied set from cells (useful after bulk state restore)."""
+        occ = set()
+        for y, row in enumerate(self.cells):
+            for x, v in enumerate(row):
+                if v != 0:
+                    occ.add((x, y))
+        self.occupied = occ
 
     def has_exact_five(self, x, y):
         """Check for an exact five-in-a-row through (x, y); overlines do not win."""

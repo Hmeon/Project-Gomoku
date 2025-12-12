@@ -63,7 +63,17 @@ class PolicyValueInfer:
         board: 2D list of ints {-1,0,1}; to_play: -1 or 1
         Returns policy probs over board_size*board_size and scalar value.
         """
-        x = encode_board(board, to_play).unsqueeze(0).to(self.device)
+        cells = board["cells"] if isinstance(board, dict) and "cells" in board else board
+        if not isinstance(cells, list) or not cells or not isinstance(cells[0], list):
+            raise TypeError(f"Invalid board format for PV predict: {type(board)}")
+        h, w = len(cells), len(cells[0])
+        if h != self.board_size or w != self.board_size:
+            raise ValueError(
+                f"Board size {h}x{w} does not match PV model board_size {self.board_size}. "
+                "Load a compatible checkpoint or disable PV."
+            )
+
+        x = encode_board(cells, to_play).unsqueeze(0).to(self.device)
         logits, value = self.model(x)
         probs = torch.softmax(logits, dim=1).squeeze(0).cpu()
         return probs, value.item()

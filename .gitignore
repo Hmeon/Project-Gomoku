@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+
+# Virtual environments
+.venv/
+Battle_Omok_AI/.venv/
+
+# IDEs / tooling
+.idea/
+.gemini/
+
+# Project outputs
+Battle_Omok_AI/logs/
+Battle_Omok_AI/checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.jsonl.idx
+
+# OS files
+.DS_Store
+Thumbs.db

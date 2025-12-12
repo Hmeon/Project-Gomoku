@@ -25,11 +25,24 @@ def test_black_double_three_forbidden():
 
 def test_black_double_four_forbidden():
     b = Board(size=15)
-    # Two simultaneous fours when placing at (7,7)
-    coords = [(4, 7), (5, 7), (6, 7), (8, 7), (9, 7), (10, 7)]
+    # Two open-fours simultaneously when placing at (7,7)
+    coords = [
+        # horizontal three with a gap at (7,7)
+        (5, 7), (6, 7), (8, 7),
+        # vertical three with a gap at (7,7)
+        (7, 5), (7, 6), (7, 8),
+    ]
     for x, y in coords:
         b.place(x, y, -1)
     assert renju_rules.is_forbidden(b, 7, 7, -1)
+
+
+def test_black_open_four_allowed():
+    b = Board(size=15)
+    # Creating a single open four is legal for black (not a 4-4 foul).
+    for x in (5, 6, 7):
+        b.place(x, 7, -1)
+    assert renju_rules.is_forbidden(b, 8, 7, -1) is False
 
 
 def test_five_trumps_foul():
