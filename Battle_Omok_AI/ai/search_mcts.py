@@ -128,6 +128,65 @@ def choose_move(
             return move, pi
         return move
 
+    # Fast path: if there is an immediate winning move, play it directly.
+    for mv in candidates:
+        x, y = mv
+        board._push_stone(x, y, color)
+        try:
+            if renju_rules.is_win_after_move(board, x, y, color):
+                if return_pi:
+                    pi = [0.0] * (board.size * board.size)
+                    pi[y * board.size + x] = 1.0
+                    return mv, pi
+                return mv
+        finally:
+            board._pop_stone(x, y)
+
+    # Full-board tactical guardrails:
+    # - If a winning move exists but got truncated out of candidates, still play it.
+    # - If the opponent has an immediate winning move, try to block it directly.
+    for y in range(board.size):
+        for x in range(board.size):
+            if not board.is_empty(x, y):
+                continue
+            board._push_stone(x, y, color)
+            try:
+                if renju_rules.is_win_after_move(board, x, y, color):
+                    mv = (x, y)
+                    if return_pi:
+                        pi = [0.0] * (board.size * board.size)
+                        pi[y * board.size + x] = 1.0
+                        return mv, pi
+                    return mv
+            finally:
+                board._pop_stone(x, y)
+
+    opp = -color
+    threat_moves: List[Tuple[int, int]] = []
+    for y in range(board.size):
+        for x in range(board.size):
+            if not board.is_empty(x, y):
+                continue
+            board._push_stone(x, y, opp)
+            try:
+                if renju_rules.is_win_after_move(board, x, y, opp):
+                    threat_moves.append((x, y))
+            finally:
+                board._pop_stone(x, y)
+
+    if threat_moves:
+        for x, y in threat_moves:
+            if not board.is_empty(x, y):
+                continue
+            if color == -1 and renju_rules.is_forbidden(board, x, y, color):
+                continue
+            mv = (x, y)
+            if return_pi:
+                pi = [0.0] * (board.size * board.size)
+                pi[y * board.size + x] = 1.0
+                return mv, pi
+            return mv
+
     def normalize_priors(priors: dict, moves: List[Tuple[int, int]]):
         total = sum(priors.get(mv, 0.0) for mv in moves)
         if total <= 0:

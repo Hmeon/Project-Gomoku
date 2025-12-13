@@ -77,3 +77,17 @@ class PolicyValueNet(nn.Module):
         value = torch.tanh(self.value_fc2(v))
 
         return policy_logits, value.squeeze(-1)
+
+    def forward_value(self, x: torch.Tensor) -> torch.Tensor:
+        """Value-only forward pass (skips policy head computation)."""
+        out = self.stem(x)
+        out = self.res_blocks(out)
+
+        v = self.value_conv(out)
+        if self.value_bn is not None:
+            v = self.value_bn(v)
+        v = F.relu(v, inplace=True)
+        v = v.view(v.size(0), -1)
+        v = F.relu(self.value_fc1(v), inplace=True)
+        value = torch.tanh(self.value_fc2(v))
+        return value.squeeze(-1)

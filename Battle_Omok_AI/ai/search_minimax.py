@@ -39,6 +39,7 @@ class MinimaxSearcher:
         self.start_time = None
         self.pv_move = None
         self.root_score = None
+        self._pv_value_cache = {}
 
     def choose_move(self, board, deadline):
         """
@@ -48,6 +49,7 @@ class MinimaxSearcher:
         self.start_time = time.time()
         self.root_score = heuristic.score_board(board, self.color, patterns=self.patterns)
         root_hash = transposition.hash_board(board, self.zobrist_table)
+        self._pv_value_cache = {}
         
         # First try a narrow VCF search for forced wins, if enabled.
         if self.enable_vcf:
@@ -94,13 +96,15 @@ class MinimaxSearcher:
 
         # Terminal state check
         if depth == 0 or board.move_count == self.board_size * self.board_size:
-            return self._evaluate_terminal(board, node_color, current_score), None
+            return self._evaluate_terminal(board, node_color, current_score, current_hash), None
 
         # Transposition table lookup
         key = (current_hash, node_color)
+        tt_move = None
         cached = self.cache.get(key)
         if cached:
             cached_depth, cached_score, cached_flag, cached_move = cached
+            tt_move = cached_move
             if cached_depth >= depth:
                 if cached_flag == "EXACT":
                     return cached_score, cached_move
@@ -113,12 +117,20 @@ class MinimaxSearcher:
 
         # Generate and order moves (filter black fouls; fall back to full-scan if needed)
         candidates = self._legal_candidates(board, node_color)
+        if tt_move is not None:
+            try:
+                tx, ty = tt_move
+                if board.is_empty(tx, ty) and not (node_color == -1 and renju_rules.is_forbidden(board, tx, ty, node_color)):
+                    candidates = [tt_move] + [mv for mv in candidates if mv != tt_move]
+                    candidates = candidates[: self.candidate_limit]
+            except Exception:
+                pass
         if not candidates:
             # No legal moves for the side to move -> disqualification loss.
             score = (-INF + board.move_count) if node_color == self.color else (INF - board.move_count)
             return score, None
 
-        ordered_moves = self._order_moves(board, candidates, node_color, depth)
+        ordered_moves = self._order_moves(board, candidates, node_color, depth, tt_move=tt_move)
         if not ordered_moves:
             score = (-INF + board.move_count) if node_color == self.color else (INF - board.move_count)
             return score, None
@@ -155,12 +167,12 @@ class MinimaxSearcher:
             next_hash = current_hash ^ self.zobrist_table[y * self.board_size + x][color_idx]
 
             try:
-                new_score = heuristic.update_score_after_move(
-                    board, x, y, node_color, self.color, current_score, patterns=self.patterns
-                )
                 if win_now:
                     score = (INF - board.move_count) if maximizing else (-INF + board.move_count)
                 else:
+                    new_score = heuristic.update_score_after_move(
+                        board, x, y, node_color, self.color, current_score, patterns=self.patterns
+                    )
                     score, _ = self._minimax(
                         board,
                         -node_color,
@@ -173,6 +185,9 @@ class MinimaxSearcher:
                     )
             finally:
                 board._pop_stone(x, y)
+
+            if win_now:
+                return score, move
 
             if maximizing:
                 if score > best_score:
@@ -209,10 +224,17 @@ class MinimaxSearcher:
         legal_all = [mv for mv in all_empty if not renju_rules.is_forbidden(board, mv[0], mv[1], node_color)]
         return legal_all[: self.candidate_limit]
 
-    def _evaluate_terminal(self, board, node_color, current_score):
+    def _evaluate_terminal(self, board, node_color, current_score, current_hash: int):
         score = current_score
         if self.pv_helper:
-            _, val = self.pv_helper.predict(board.cells, node_color)
+            key = (current_hash, node_color)
+            val = self._pv_value_cache.get(key)
+            if val is None:
+                if hasattr(self.pv_helper, "predict_value"):
+                    val = self.pv_helper.predict_value(board.cells, node_color)
+                else:
+                    _, val = self.pv_helper.predict(board.cells, node_color)
+                self._pv_value_cache[key] = val
             val_score = val if node_color == self.color else -val
             score += int(val_score * PV_SCALE)
         return score
@@ -225,7 +247,7 @@ class MinimaxSearcher:
             flag = "LOWER"
         self.cache[key] = (depth, score, flag, move)
 
-    def _order_moves(self, board, candidates, node_color, current_depth):
+    def _order_moves(self, board, candidates, node_color, current_depth, *, tt_move=None):
         pv_probs = None
         if self.pv_helper and current_depth == self.depth:
             probs, _ = self.pv_helper.predict(board.cells, node_color)
@@ -245,6 +267,8 @@ class MinimaxSearcher:
             
             local_score = INF // 2 if win_now else self._local_density(board, x, y, node_color, opp)
 
+            if tt_move is not None and move == tt_move:
+                local_score += INF // 8
             if self.pv_move and move == self.pv_move and current_depth == self.depth:
                 local_score += INF // 4
             if pv_probs is not None:

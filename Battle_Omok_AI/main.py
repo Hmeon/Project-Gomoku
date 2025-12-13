@@ -39,6 +39,26 @@ def resolve_project_path(path: str | Path) -> Path:
     return candidate if candidate.exists() else p
 
 
+def find_default_pv_checkpoint() -> Path | None:
+    """Pick a reasonable default PV checkpoint under `checkpoints/` if present."""
+    ckpt_dir = PROJECT_DIR / "checkpoints"
+    if not ckpt_dir.exists():
+        return None
+
+    preferred = [
+        ckpt_dir / "pv_latest.pt",
+        ckpt_dir / "pv_latest(1).pt",  # common Windows "duplicate" naming
+        ckpt_dir / "pv_latest_prev.pt",
+    ]
+    for p in preferred:
+        if p.exists():
+            return p
+
+    candidates = [p for p in ckpt_dir.glob("pv_latest*.pt") if "rejected" not in p.name]
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0] if candidates else None
+
+
 def load_settings(path):
     path = resolve_project_path(path)
     with open(path, "r", encoding="utf-8") as f:
@@ -64,7 +84,10 @@ def main():
     patterns = heuristic.load_patterns()
 
     # Optional PV checkpoint
-    pv_path = resolve_project_path(args.pv_checkpoint) if args.pv_checkpoint else resolve_project_path("checkpoints/pv_latest.pt")
+    if args.pv_checkpoint:
+        pv_path = resolve_project_path(args.pv_checkpoint)
+    else:
+        pv_path = find_default_pv_checkpoint() or resolve_project_path("checkpoints/pv_latest.pt")
     pv_device = args.pv_device or "cpu"
     pv_helper = None
     if pv_path.exists():

@@ -36,3 +36,17 @@ def test_predict_raises_on_size_mismatch(tmp_path):
         assert False, "Expected ValueError for size mismatch"
     except ValueError as e:
         assert "does not match PV model" in str(e)
+
+
+def test_predict_value_matches_predict_value_head(tmp_path):
+    model = PolicyValueNet(board_size=15, channels=64, num_blocks=5)
+    state = model.state_dict()
+    path = tmp_path / "plain_state.pt"
+    torch.save(state, str(path))
+
+    infer = PolicyValueInfer(str(path), device="cpu")
+    empty_board = [[0] * 15 for _ in range(15)]
+
+    _, v1 = infer.predict(empty_board, to_play=-1)
+    v2 = infer.predict_value(empty_board, to_play=-1)
+    assert abs(v1 - v2) < 1e-6

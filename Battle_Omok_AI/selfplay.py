@@ -28,6 +28,29 @@ except ImportError:
     from .ai import move_selector, heuristic, policy_value, search_minimax, search_mcts
 
 
+PROJECT_DIR = Path(__file__).resolve().parent
+
+
+def find_default_pv_checkpoint() -> Path | None:
+    """Pick a reasonable default PV checkpoint under `checkpoints/` if present."""
+    ckpt_dir = PROJECT_DIR / "checkpoints"
+    if not ckpt_dir.exists():
+        return None
+
+    preferred = [
+        ckpt_dir / "pv_latest.pt",
+        ckpt_dir / "pv_latest(1).pt",
+        ckpt_dir / "pv_latest_prev.pt",
+    ]
+    for p in preferred:
+        if p.exists():
+            return p
+
+    candidates = [p for p in ckpt_dir.glob("pv_latest*.pt") if "rejected" not in p.name]
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0] if candidates else None
+
+
 def snapshot_board_state(board: Board):
     """Return a full snapshot of the board (cells, move_count, history)."""
     return {
@@ -376,7 +399,10 @@ def main():
     patterns = heuristic.load_patterns()
     pv_device = args.pv_device or "cpu"
 
-    default_pv_path = Path(args.pv_checkpoint) if args.pv_checkpoint else Path("checkpoints/pv_latest.pt")
+    if args.pv_checkpoint:
+        default_pv_path = Path(args.pv_checkpoint)
+    else:
+        default_pv_path = find_default_pv_checkpoint() or (PROJECT_DIR / "checkpoints" / "pv_latest.pt")
     black_pv_path = Path(args.black_pv_checkpoint) if args.black_pv_checkpoint else default_pv_path
     white_pv_path = Path(args.white_pv_checkpoint) if args.white_pv_checkpoint else default_pv_path
 

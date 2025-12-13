@@ -4,7 +4,7 @@ import time
 import pytest
 
 from Battle_Omok_AI.Board import Board
-from Battle_Omok_AI.ai import heuristic, search_mcts, search_minimax, transposition
+from Battle_Omok_AI.ai import heuristic, move_selector, search_mcts, search_minimax, transposition
 
 
 def test_mcts_returns_legal_move():
@@ -110,6 +110,74 @@ def test_mcts_does_not_mutate_board():
     assert b.cells == before_cells
     assert b.move_count == before_count
     assert b.is_empty(*mv)
+
+
+def test_mcts_finds_immediate_win_even_if_candidates_exclude_it(monkeypatch):
+    # Ensure tactical full-board scan finds a win that would otherwise be missed.
+    monkeypatch.setattr(search_mcts.move_selector, "generate_candidates", lambda *args, **kwargs: [(2, 2)])
+    b = Board(size=5)
+    for x in range(4):
+        b.place(x, 0, -1)
+
+    deadline = time.time() + 0.5
+    mv = search_mcts.choose_move(
+        b,
+        color=-1,
+        deadline=deadline,
+        rollout_limit=8,
+        candidate_limit=1,
+        dirichlet_alpha=0.0,
+        dirichlet_frac=0.0,
+        temperature=1e-6,
+    )
+    assert mv == (4, 0)
+
+
+def test_mcts_blocks_opponent_immediate_win_even_if_candidates_exclude_block(monkeypatch):
+    # White must block black's exact-five threat at (4,0).
+    monkeypatch.setattr(search_mcts.move_selector, "generate_candidates", lambda *args, **kwargs: [(2, 2)])
+    b = Board(size=5)
+    for x in range(4):
+        b.place(x, 0, -1)
+
+    deadline = time.time() + 0.5
+    mv = search_mcts.choose_move(
+        b,
+        color=1,
+        deadline=deadline,
+        rollout_limit=8,
+        candidate_limit=1,
+        dirichlet_alpha=0.0,
+        dirichlet_frac=0.0,
+        temperature=1e-6,
+    )
+    assert mv == (4, 0)
+
+
+def test_candidate_generator_prioritizes_run_endpoints():
+    # Global top-N truncation can miss remote tactical endpoints; ensure we boost them.
+    b = Board(size=15)
+    center = 7
+    stones = []
+    for dx in range(-2, 3):
+        for dy in range(-2, 3):
+            if dx == 0 and dy == 0:
+                continue
+            x = center + dx
+            y = center + dy
+            if 0 <= x < b.size and 0 <= y < b.size:
+                stones.append((x, y))
+
+    c = -1
+    for x, y in stones[:20]:
+        b.place(x, y, c)
+        c = -c
+
+    for x in range(10, 14):
+        b.place(x, 0, -1)
+
+    # Winning endpoint for the 4-in-row above.
+    assert (14, 0) in move_selector.generate_candidates(b, limit=15)
 
 
 def test_mcts_raises_when_no_legal_moves(monkeypatch):

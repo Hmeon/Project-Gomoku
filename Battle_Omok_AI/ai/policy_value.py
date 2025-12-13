@@ -77,3 +77,23 @@ class PolicyValueInfer:
         logits, value = self.model(x)
         probs = torch.softmax(logits, dim=1).squeeze(0).cpu()
         return probs, value.item()
+
+    @torch.no_grad()
+    def predict_value(self, board, to_play: int) -> float:
+        """
+        Value-only inference (skips policy softmax and policy head computation).
+        Returns scalar value from the perspective of `to_play`.
+        """
+        cells = board["cells"] if isinstance(board, dict) and "cells" in board else board
+        if not isinstance(cells, list) or not cells or not isinstance(cells[0], list):
+            raise TypeError(f"Invalid board format for PV predict: {type(board)}")
+        h, w = len(cells), len(cells[0])
+        if h != self.board_size or w != self.board_size:
+            raise ValueError(
+                f"Board size {h}x{w} does not match PV model board_size {self.board_size}. "
+                "Load a compatible checkpoint or disable PV."
+            )
+
+        x = encode_board(cells, to_play).unsqueeze(0).to(self.device)
+        value = self.model.forward_value(x)
+        return float(value.item())
