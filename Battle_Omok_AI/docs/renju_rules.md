@@ -47,3 +47,12 @@ Implementation reference:
 
 Implementation reference:
 - `engine/renju_rules.py` 내부의 "five has priority over fouls" 로직
+
+---
+
+## 부록: 구현 메모 (2025-12)
+
+- 금수 판정은 흑에게만 적용되며, 백은 금수의 제약을 받지 않습니다.
+- 장목은 연속 길이 > 5로 판정하고, 흑의 exact-five 승리는 금수보다 우선합니다.
+- open-three/open-four는 방향성 line 기반 run 분석으로 판정하며, 실전 적합성을 우선한 구현입니다.
+

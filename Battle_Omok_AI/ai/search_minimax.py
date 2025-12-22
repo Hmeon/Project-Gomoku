@@ -15,7 +15,9 @@ except ImportError:
 
 INF = 10 ** 9
 PV_SCALE = 5000  # scale factor to mix PV value into heuristic
+PV_PRIOR_WEIGHT = PV_SCALE / 2
 TIME_CHECK_MASK = 2047  # check every 2048 nodes
+ORDER_RANK_WEIGHT = 3
 
 
 class MinimaxSearcher:
@@ -40,6 +42,7 @@ class MinimaxSearcher:
         self.pv_move = None
         self.root_score = None
         self._pv_value_cache = {}
+        self._root_pv_probs = None
 
     def choose_move(self, board, deadline):
         """
@@ -50,6 +53,21 @@ class MinimaxSearcher:
         self.root_score = heuristic.score_board(board, self.color, patterns=self.patterns)
         root_hash = transposition.hash_board(board, self.zobrist_table)
         self._pv_value_cache = {}
+        self._root_pv_probs = None
+        if self.pv_helper is not None:
+            try:
+                probs, _ = self.pv_helper.predict(board.cells, self.color)
+                self._root_pv_probs = probs
+            except Exception:
+                self._root_pv_probs = None
+
+        # Tactical guardrails: immediate win or block before deeper search.
+        win_move = self._find_immediate_win(board, self.color)
+        if win_move is not None:
+            return win_move
+        block_move = self._find_immediate_block(board, self.color)
+        if block_move is not None:
+            return block_move
         
         # First try a narrow VCF search for forced wins, if enabled.
         if self.enable_vcf:
@@ -91,6 +109,47 @@ class MinimaxSearcher:
             if time.time() > self.deadline:
                 raise TimeoutError("Search timed out")
 
+    def _find_immediate_win(self, board, color):
+        for y in range(self.board_size):
+            for x in range(self.board_size):
+                if not board.is_empty(x, y):
+                    continue
+                if color == -1 and renju_rules.is_forbidden(board, x, y, color):
+                    continue
+                board._push_stone(x, y, color)
+                try:
+                    if renju_rules.is_win_after_move(board, x, y, color):
+                        return (x, y)
+                finally:
+                    board._pop_stone(x, y)
+        return None
+
+    def _find_immediate_block(self, board, color):
+        opp = -color
+        threat_moves = []
+        for y in range(self.board_size):
+            for x in range(self.board_size):
+                if not board.is_empty(x, y):
+                    continue
+                if opp == -1 and renju_rules.is_forbidden(board, x, y, opp):
+                    continue
+                board._push_stone(x, y, opp)
+                try:
+                    if renju_rules.is_win_after_move(board, x, y, opp):
+                        threat_moves.append((x, y))
+                finally:
+                    board._pop_stone(x, y)
+
+        if not threat_moves:
+            return None
+
+        for x, y in threat_moves:
+            if color == -1 and renju_rules.is_forbidden(board, x, y, color):
+                continue
+            if board.is_empty(x, y):
+                return (x, y)
+        return None
+
     def _minimax(self, board, node_color, depth, alpha, beta, current_score, last_move, current_hash: int):
         self._time_ok()
 
@@ -116,7 +175,8 @@ class MinimaxSearcher:
                     return cached_score, cached_move
 
         # Generate and order moves (filter black fouls; fall back to full-scan if needed)
-        candidates = self._legal_candidates(board, node_color)
+        root_pv_probs = self._root_pv_probs if (depth == self.depth and node_color == self.color) else None
+        candidates = self._legal_candidates(board, node_color, pv_probs=root_pv_probs)
         if tt_move is not None:
             try:
                 tx, ty = tt_move
@@ -205,13 +265,21 @@ class MinimaxSearcher:
         
         return best_score, best_local_move
 
-    def _legal_candidates(self, board, node_color):
+    def _legal_candidates(self, board, node_color, pv_probs=None):
         """
         Generate candidate moves for a node.
         For black, filter forbidden moves; if all local candidates are forbidden,
         fall back to scanning all legal empties (rare but avoids search dead-ends).
         """
-        candidates = move_selector.generate_candidates(board, limit=self.candidate_limit)
+        candidates = move_selector.generate_candidates(
+            board,
+            limit=self.candidate_limit,
+            color=node_color,
+            patterns=self.patterns,
+            use_heuristic=True,
+            pv_probs=pv_probs,
+            pv_weight=PV_PRIOR_WEIGHT,
+        )
         if node_color != -1:
             return candidates
 
@@ -249,12 +317,19 @@ class MinimaxSearcher:
 
     def _order_moves(self, board, candidates, node_color, current_depth, *, tt_move=None):
         pv_probs = None
-        if self.pv_helper and current_depth == self.depth:
-            probs, _ = self.pv_helper.predict(board.cells, node_color)
-            pv_probs = probs
+        if self.pv_helper and current_depth == self.depth and self._root_pv_probs is None:
+            try:
+                probs, _ = self.pv_helper.predict(board.cells, node_color)
+                pv_probs = probs
+            except Exception:
+                pv_probs = None
 
         ordered = []
         opp = -node_color
+        rank_bonus = {
+            mv: (len(candidates) - idx) * ORDER_RANK_WEIGHT
+            for idx, mv in enumerate(candidates)
+        }
         for move in candidates:
             x, y = move
             if board.cells[y][x] != 0:
@@ -266,6 +341,7 @@ class MinimaxSearcher:
                 board._pop_stone(x, y)
             
             local_score = INF // 2 if win_now else self._local_density(board, x, y, node_color, opp)
+            local_score += rank_bonus.get(move, 0)
 
             if tt_move is not None and move == tt_move:
                 local_score += INF // 8
@@ -430,7 +506,7 @@ class MinimaxSearcher:
             return None
 
 
-def choose_move(board, color, depth, deadline, cache=None, zobrist_table=None, candidate_limit=15, patterns=None, pv_helper=None, stats=None, enable_vcf=False):
+def choose_move(board, color, depth, deadline, cache=None, zobrist_table=None, candidate_limit=20, patterns=None, pv_helper=None, stats=None, enable_vcf=False):
     """
     Public function to start a search. Instantiates and uses MinimaxSearcher.
     Maintains backward compatibility.

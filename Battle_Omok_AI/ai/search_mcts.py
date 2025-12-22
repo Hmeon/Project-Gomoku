@@ -3,7 +3,7 @@
 Key design:
 - Negamax backup: values are from the perspective of the player to move at each node;
   during backprop we flip the sign each ply.
-- No rollouts: leaf values come from the value head (if available), else 0.
+- No rollouts: leaf values come from the value head (if available), else heuristic tanh.
 - Priors are injected once per expansion; PUCT selection uses those priors.
 - Black forbidden moves are filtered via renju_rules.
 """
@@ -15,7 +15,7 @@ import time
 import random
 from typing import List, Optional, Tuple
 
-from . import move_selector
+from . import move_selector, heuristic
 try:
     from engine import renju_rules
 except ImportError:
@@ -23,6 +23,9 @@ except ImportError:
 
 # Optional global PV helper for backward compatibility
 PV_HELPER = None
+HEURISTIC_VALUE_SCALE = 20000.0
+HEURISTIC_PRIOR_SCALE = 10000.0
+HEURISTIC_PRIOR_CLAMP = 50000.0
 
 class _Node:
     __slots__ = (
@@ -83,18 +86,53 @@ def choose_move(
     temperature: float = 1.0,
     pv_helper=None,
     return_pi: bool = False,
+    patterns=None,
 ):
     """
     Return a move using PUCT MCTS guided by optional policy/value helper.
     - color: player to move (-1 or 1)
     - deadline: epoch seconds to stop
     - return_pi: if True, also return root visit distribution (pi) as a list
+    - patterns: optional pattern list for heuristic priors/value when PV is absent
     """
 
     pv_helper = pv_helper or PV_HELPER
+    patterns = patterns or heuristic.DEFAULT_PATTERNS
+
+    def heuristic_priors_and_value(b, c, moves):
+        try:
+            base_score = heuristic.score_board(b, c, patterns=patterns)
+        except Exception:
+            base_score = 0.0
+        value = math.tanh(base_score / HEURISTIC_VALUE_SCALE)
+        priors = {}
+        for mv in moves:
+            x, y = mv
+            if not b.is_empty(x, y):
+                continue
+            b._push_stone(x, y, c)
+            try:
+                new_score = heuristic.update_score_after_move(
+                    b, x, y, c, c, base_score, patterns=patterns
+                )
+            finally:
+                b._pop_stone(x, y)
+            delta = new_score - base_score
+            if delta > HEURISTIC_PRIOR_CLAMP:
+                delta = HEURISTIC_PRIOR_CLAMP
+            elif delta < -HEURISTIC_PRIOR_CLAMP:
+                delta = -HEURISTIC_PRIOR_CLAMP
+            priors[mv] = math.exp(delta / HEURISTIC_PRIOR_SCALE)
+        return priors, value
 
     def filtered_candidates(b, c):
-        cands = move_selector.generate_candidates(b, limit=candidate_limit)
+        cands = move_selector.generate_candidates(
+            b,
+            limit=candidate_limit,
+            color=c,
+            patterns=patterns,
+            use_heuristic=True,
+        )
         if c == -1:
             cands = [mv for mv in cands if not renju_rules.is_forbidden(b, mv[0], mv[1], c)]
             if not cands:
@@ -206,9 +244,12 @@ def choose_move(
             idx = mv[1] * board.size + mv[0]
             root_priors[mv] = probs[idx].item()
     else:
-        uniform = 1.0 / max(len(candidates), 1)
-        for mv in candidates:
-            root_priors[mv] = uniform
+        root_priors, root_value = heuristic_priors_and_value(board, color, candidates)
+        if not root_priors:
+            uniform = 1.0 / max(len(candidates), 1)
+            for mv in candidates:
+                root_priors[mv] = uniform
+            root_value = 0.0
 
     # Normalize and inject Dirichlet noise at root for exploration (useful for self-play).
     normalize_priors(root_priors, candidates)
@@ -232,7 +273,7 @@ def choose_move(
         child = _Node(move=mv, parent=root, untried=[], prior=root_priors.get(mv, 0.0))
         root.children.append(child)
     root.is_expanded = True
-    root.value_estimate = float(root_value) if pv_helper is not None else 0.0
+    root.value_estimate = float(root_value)
 
     def time_ok():
         if time.time() > deadline:
@@ -260,11 +301,13 @@ def choose_move(
                     idx = mv[1] * sim_board.size + mv[0]
                     priors[mv] = probs[idx].item()
             else:
-                priors = {mv: 1.0 / max(len(moves), 1) for mv in moves}
-                val = 0.0
+                priors, val = heuristic_priors_and_value(sim_board, to_move, moves)
+                if not priors:
+                    priors = {mv: 1.0 / max(len(moves), 1) for mv in moves}
+                    val = 0.0
             normalize_priors(priors, moves)
             node.priors = priors
-            node.value_estimate = float(val) if pv_helper is not None else 0.0
+            node.value_estimate = float(val)
 
             if not node.children:
                 for mv in moves:

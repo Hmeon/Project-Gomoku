@@ -5,30 +5,30 @@
 
 ---
 
-## 1. Functional Requirements
+## 1. 기능 요구사항
 
-### 1.1 Rules
+### 1.1 규칙
 
 - Renju 규칙을 적용한다.
   - 흑 금수: 3-3, 4-4, 장목(6+)
   - 승리: 흑은 exact five, 백은 5+
 - 불법 수(범위 밖/중복/금수/시간 초과)는 패배 처리 가능해야 한다.
 
-### 1.2 Play modes
+### 1.2 플레이 모드
 
 - AI vs AI
 - Human vs AI / AI vs Human
 - Human vs Human
 - GUI 모드에서 마우스 입력으로 착수 가능해야 한다.
 
-### 1.3 Training pipeline
+### 1.3 학습 파이프라인
 
 - Self-play로 (board, to_play, pi, value) 샘플을 JSONL로 생성한다.
 - PV 네트워크를 self-play 데이터로 학습한다.
 - 반복 학습 루프(auto-train)를 제공한다.
 - 평가 게이트를 통해 candidate 승격 여부를 결정할 수 있어야 한다.
 
-### 1.4 Logging (paper-ready)
+### 1.4 로깅(보고서 수준)
 
 - iteration별 self-play 요약 지표가 CSV로 남아야 한다.
 - epoch별 학습 loss 지표가 CSV로 남아야 한다.
@@ -36,7 +36,7 @@
 
 ---
 
-## 2. Non-functional Requirements
+## 2. 비기능 요구사항
 
 - **Robustness:** timeouts/예외 시에도 보드 상태가 깨지지 않아야 한다.
 - **Reproducibility:** seed 고정 및 로그를 통한 결과 재현이 가능해야 한다.
@@ -44,12 +44,13 @@
 
 ---
 
-## 3. Environment Requirements
+## 3. 환경 요구사항
 
 - Python 3.10+
 - 주요 라이브러리:
   - PyTorch (`torch`, `torchvision`, `torchaudio`)
   - PyYAML
   - pygame
+  - Pillow (리포트용 그래프 생성 도구)
   - pytest(개발/검증)
 - (선택) AMD GPU: `torch-directml` (Windows)

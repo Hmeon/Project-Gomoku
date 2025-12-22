@@ -9,7 +9,7 @@ except ImportError:
 
 
 class Iot_20203078_GIR(Player):
-    def __init__(self, color=1, depth=3, candidate_limit=15, patterns=None, pv_helper=None, enable_vcf=False, search_backend="minimax", search_args=None):
+    def __init__(self, color=1, depth=3, candidate_limit=20, patterns=None, pv_helper=None, enable_vcf=False, search_backend="minimax", search_args=None):
         super().__init__(color)
         self.depth = depth
         self.candidate_limit = candidate_limit
@@ -41,6 +41,7 @@ class Iot_20203078_GIR(Player):
                 temperature=args.get("temperature", 1.0),
                 pv_helper=self.pv_helper,
                 return_pi=True,
+                patterns=self.patterns,
             )
             self.last_pi = pi
             return move

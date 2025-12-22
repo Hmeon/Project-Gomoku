@@ -5,6 +5,24 @@
 
 ---
 
+## [1.1.2] (2025-12-23) - Search quality + docs cleanup
+
+### Added
+
+- MCTS에서 PV가 없을 때 heuristic priors/value로 탐색을 보강하는 fallback 로직
+- Minimax 루트에서 즉시 승/차단 전수 스캔 가드레일
+
+### Changed
+
+- 기본 `candidate_limit`을 20으로 조정(settings/self-play/플레이어 기본값)
+- 문서 전반 정리 및 기본값/실제 동작 설명 업데이트
+
+### Tests
+
+- Not run (docs + heuristic changes only)
+
+---
+
 ## [1.1.1] (2025-12-12) - Research-grade logging & robustness
 
 ### Added

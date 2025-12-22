@@ -133,7 +133,7 @@ Implementation references:
 핵심 요소:
 - Negamax backup(값 전파 시 부호 반전)
 - PUCT 선택 기준: `Q + U` 형태(부모 관점에서 Q 부호 처리)
-- PV 정책 priors + PV value(가능하면)
+- PV 정책 priors + PV value(가능하면), 없으면 heuristic priors/value
 - 루트 priors에 Dirichlet noise(탐색 다양성)
 - `return_pi=True`일 때 루트 방문 분포를 soft pi로 반환(학습 타깃)
 - 흑 금수 필터링 + 후보 고갈 시 full-scan fallback
@@ -166,3 +166,23 @@ Implementation references:
 - `ai/pv_model.py`
 - `ai/dataset.py`
 - `train_pv.py`
+
+---
+
+## 부록: 실제 동작 요약 (2025-12)
+
+이 섹션은 코드 기준 실제 동작을 요약합니다.
+
+### Minimax (iterative deepening)
+- 후보 생성은 Manhattan/Euclidean 반경(기본 2)에서 시작하고, proximity + run-endpoint 보강 + 패턴 델타로 정렬합니다(PV priors는 루트에서 선택적으로 혼합).
+- 흑 후보는 금수 필터링을 적용하며, 모두 금수이면 full-scan으로 보드 전체를 확인합니다(`candidate_limit` 적용).
+- 루트에서 즉시 승/차단을 전수 스캔하여 전술 누락을 줄입니다.
+- VCF는 루트에서만 사용되는 빠른 휴리스틱 탐색입니다(기본 max depth 4).
+- PV policy는 루트 move ordering에만 사용되며, PV value는 리프 평가에 고정 스케일로 혼합합니다.
+
+### PUCT MCTS
+- 롤아웃은 사용하지 않으며, 리프 값은 PV value가 있으면 사용하고 없으면 heuristic tanh 값을 사용합니다.
+- priors는 PV policy가 있으면 사용하고, 없으면 패턴 델타 기반 heuristic priors를 사용합니다.
+- 후보 누락을 막기 위해 즉시 승/차단을 full-scan으로 확인합니다.
+- 흑 금수 필터링 후 후보가 없으면 합법 수 전체에서 fallback합니다.
+- 루트 Dirichlet noise는 `dirichlet_alpha`와 `dirichlet_frac`가 모두 > 0이고 후보가 2개 이상일 때만 적용됩니다.

@@ -353,7 +353,7 @@ def main():
     parser.add_argument("--board-size", type=int, default=15, help="Board size")
     parser.add_argument("--timeout", type=float, default=5.0, help="Seconds per move for built-in AIs")
     parser.add_argument("--depth", type=int, default=3, help="Search depth for built-in AIs")
-    parser.add_argument("--candidate-limit", type=int, default=15, help="Candidate fan-out for built-in AIs")
+    parser.add_argument("--candidate-limit", type=int, default=20, help="Candidate fan-out for built-in AIs")
     parser.add_argument("--output", default="selfplay_renju.jsonl", help="Output JSONL path")
     parser.add_argument("--stats-only", action="store_true", help="Only compute stats; do not write trajectories")
     parser.add_argument("--swap-colors", action="store_true", help="Swap black/white each game for diversity")

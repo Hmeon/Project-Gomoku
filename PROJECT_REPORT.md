@@ -107,7 +107,10 @@ Implementation reference: `Battle_Omok_AI/engine/renju_rules.py`
 ### 4.1 Candidate Generation
 
 Instead of expanding all empty cells, the AI ranks candidate moves near existing stones:
-- Speeds up search significantly on midgame positions.
+- Neighborhood is a Manhattan/Euclidean radius (default radius=2), which reduces branching.
+- Scores combine proximity, run-endpoint boosts, adjacency counts, and optional pattern delta (local heuristic).
+- When PV priors are available at the root, they can be blended into candidate scores for ordering.
+- Speeds up search significantly on midgame positions while keeping tactical endpoints.
 - Has a full-scan fallback when all local candidates are forbidden for Black.
 
 Implementation reference: `Battle_Omok_AI/ai/move_selector.py`
@@ -118,6 +121,7 @@ Core features:
 - Iterative deepening to return the best move found before deadline.
 - Alpha-beta pruning to reduce branching.
 - Transposition table keyed by `(zobrist_hash, to_move)` to reuse results.
+- Root-level full-board scan to capture immediate win/block moves before deeper search.
 - Optional VCF probe at root to detect forced wins by continuous-four threats.
 
 Implementation reference: `Battle_Omok_AI/ai/search_minimax.py`
@@ -126,7 +130,8 @@ Implementation reference: `Battle_Omok_AI/ai/search_minimax.py`
 
 Core features:
 - Negamax backup: node values are stored from the node's to-move perspective and sign-flipped when moving up.
-- Priors from PV policy head when available; uniform priors otherwise.
+- Priors from the PV policy head when available; heuristic priors otherwise.
+- Leaf values from the PV value head when available; heuristic tanh values otherwise.
 - Root exploration noise (Dirichlet) for self-play diversity.
 - Optional `return_pi=True` returns the root visit distribution pi (soft labels).
 
@@ -229,7 +234,7 @@ python auto_train.py \
   --iterations 10 \
   --games 100 \
   --timeout 5 \
-  --candidate-limit 24 \
+  --candidate-limit 20 \
   --epsilon 0 \
   --epochs 4 \
   --device cpu \
@@ -274,3 +279,14 @@ python auto_train.py \
 2. D. Silver et al., "A general reinforcement learning algorithm that masters chess, shogi, and Go through self-play," *Science*, 2018.  
 3. A. L. Zobrist, "A new hashing method with application for game playing," 1970.  
 4. L. Kocsis and C. Szepesvari, "Bandit based Monte-Carlo Planning," *ECML*, 2006.
+
+---
+
+## Appendix: Implementation Guardrails (AI)
+
+- Minimax uses local candidate generation with run-endpoint boosting and a full-board fallback when all local candidates are illegal for Black.
+- MCTS uses no rollouts; leaf values come from the PV value head when available, otherwise heuristic tanh values.
+- MCTS uses PV priors when available, otherwise heuristic priors from pattern deltas.
+- MCTS includes immediate win/block scans to avoid candidate truncation misses.
+- Self-play records soft pi only when MCTS provides it; fallback/random moves are one-hot targets.
+

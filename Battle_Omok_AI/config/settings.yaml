@@ -2,4 +2,4 @@
 board_size: 15  # Board image/assets are aligned to 15x15 grid
 move_timeout_seconds: 5
 search_depth: 3
-candidate_limit: 15
+candidate_limit: 20

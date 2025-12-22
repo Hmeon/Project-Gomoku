@@ -100,11 +100,35 @@ def _apply_run_endpoint_bonus(board, scores: defaultdict[tuple[int, int], int], 
             boost_line(coords)
 
 
-def generate_candidates(board, last_move=None, limit=15, radius=2):
+def _distance_ok(dx: int, dy: int, radius: int, metric: str) -> bool:
+    """Return True if (dx, dy) falls within the chosen radius metric."""
+    if metric == "manhattan":
+        return abs(dx) + abs(dy) <= radius
+    if metric == "euclidean":
+        return dx * dx + dy * dy <= radius * radius
+    if metric == "chebyshev":
+        return max(abs(dx), abs(dy)) <= radius
+    return True
+
+
+def generate_candidates(
+    board,
+    last_move=None,
+    limit=15,
+    radius=2,
+    *,
+    distance_metric: str = "manhattan",
+    color: int | None = None,
+    patterns=None,
+    use_heuristic: bool = False,
+    pv_probs=None,
+    pv_weight: float = 0.0,
+):
     """
-    Generate candidate empty cells near existing stones, ranked by proximity score.
+    Generate candidate empty cells near existing stones, ranked by a heuristic score.
     - If board empty: return center only.
-    - Score = number of neighboring stones within 1 step (8-neighborhood).
+    - Neighborhood: Manhattan/Euclidean radius (default manhattan radius=2).
+    - Score = proximity + run-endpoint bonus + adjacency + optional pattern delta/prior weight.
     """
     occupied = getattr(board, "occupied", None)
     if occupied is None:
@@ -116,11 +140,13 @@ def generate_candidates(board, last_move=None, limit=15, radius=2):
 
     size = board.size
     cells = board.cells
-    scores: defaultdict[tuple[int, int], int] = defaultdict(int)
+    scores: defaultdict[tuple[int, int], float] = defaultdict(float)
 
     for ox, oy in occupied:
         for dx in range(-radius, radius + 1):
             for dy in range(-radius, radius + 1):
+                if not _distance_ok(dx, dy, radius, distance_metric):
+                    continue
                 nx, ny = ox + dx, oy + dy
                 if nx < 0 or nx >= size or ny < 0 or ny >= size:
                     continue
@@ -142,6 +168,33 @@ def generate_candidates(board, last_move=None, limit=15, radius=2):
             if 0 <= ax < size and 0 <= ay < size and cells[ay][ax] != 0:
                 adj_count += 1
         scores[(nx, ny)] += adj_count
+
+    # Optional pattern-based delta scoring (for report-aligned move ordering)
+    if use_heuristic and color in (-1, 1):
+        try:
+            from . import heuristic
+        except ImportError:  # pragma: no cover - fallback for script mode
+            from Battle_Omok_AI.ai import heuristic
+
+        patterns = patterns or heuristic.DEFAULT_PATTERNS
+        for nx, ny in list(scores):
+            if cells[ny][nx] != 0:
+                continue
+            lines_after = heuristic.lines_through(board, nx, ny, override=color)
+            lines_before = heuristic.lines_through(board, nx, ny, override=0)
+            delta = heuristic.score_lines(lines_after, color, patterns) - heuristic.score_lines(lines_before, color, patterns)
+            scores[(nx, ny)] += float(delta)
+
+    # Optional policy prior weighting (root-level hint when available)
+    if pv_probs is not None:
+        weight = float(pv_weight)
+        for nx, ny in list(scores):
+            idx = ny * size + nx
+            try:
+                prior = pv_probs[idx].item()
+            except AttributeError:
+                prior = float(pv_probs[idx])
+            scores[(nx, ny)] += prior * weight
 
     ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
     return [pos for pos, _ in ranked[:limit]]

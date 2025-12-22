@@ -26,7 +26,7 @@ python auto_train.py \
   --iterations 1 \
   --games 10 \
   --timeout 1.0 \
-  --candidate-limit 24 \
+  --candidate-limit 20 \
   --epsilon 0 \
   --epochs 1 \
   --device cpu \
@@ -44,7 +44,7 @@ python auto_train.py \
   --iterations 10 \
   --games 100 \
   --timeout 5 \
-  --candidate-limit 24 \
+  --candidate-limit 20 \
   --epsilon 0 \
   --epochs 4 \
   --device cpu \
@@ -68,7 +68,7 @@ python auto_train.py \
   - CPU 학습은 128~512 범위에서 타협
 - `--candidate-limit`
   - 너무 낮으면 전술적인 수가 누락될 수 있음(특히 중후반)
-  - 12~24 권장(초기 24 추천)
+  - 16~24 권장(기본 20)
 - `--dirichlet-alpha`, `--dirichlet-frac`, `--temperature`
   - self-play 다양성 확보용(평가에서는 noise=0, temperature=0(또는 매우 작은 값) 권장)
 - `--epsilon`
@@ -104,3 +104,14 @@ python auto_train.py \
 - `--device dml`을 사용하면 `torch-directml` 환경에서 학습/추론이 가능합니다.
 - 일부 환경에서 BatchNorm이 불안정할 수 있어 학습 스크립트가 완화 옵션을 적용합니다.
 - Windows에서는 `--train-workers 0`이 가장 안전합니다.
+
+---
+
+## 부록: self-play 라벨 동작 (2025-12)
+
+- 검색 백엔드가 MCTS이고 플레이어가 `last_pi`를 제공하면 루트 방문 분포를 soft policy 타깃으로 기록합니다.
+- timeout/invalid/foul 보정/랜덤(또는 epsilon) 착수는 one-hot policy로 기록됩니다.
+- PV 체크포인트는 선택 사항이며, `board_size` 불일치 시 해당 런에서 PV 추론을 비활성화합니다.
+- PV가 없을 때 MCTS는 heuristic priors와 tanh value 추정으로 탐색을 보강합니다.
+- 평가용 대국은 `temperature`를 0에 가깝게, Dirichlet noise는 0으로 두는 것이 안정적입니다.
+
